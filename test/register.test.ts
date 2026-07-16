@@ -48,6 +48,7 @@ async function readDurationSeconds(path: string): Promise<number> {
 async function registerTone(
   userId: string,
   seconds: number,
+  react?: (emoji: string) => Promise<unknown>,
 ): Promise<{ replies: unknown[]; reactions: string[]; duration: number }> {
   const tonePath = join(soundsDir, `tone-${userId}.wav`);
   await execFileAsync(ffmpeg, [
@@ -70,7 +71,7 @@ async function registerTone(
       size: 1024,
       url: "https://example.invalid/tone.wav",
     },
-    async (emoji) => reactions.push(emoji),
+    react ?? (async (emoji) => reactions.push(emoji)),
   );
   globalThis.fetch = async () => new Response(await readFile(tonePath));
   try {
@@ -166,40 +167,17 @@ test("登録が完了したらリアクションだけを付けて返信しな�
 });
 
 test("リアクションを付けられなくても登録失敗として扱わない", async () => {
-  const userId = "9876543215";
-  const tonePath = join(soundsDir, `tone-${userId}.wav`);
-  const replies: unknown[] = [];
-  const message = createMessage(
-    `<@${botId}>`,
-    userId,
-    async (payload) => replies.push(payload),
-    { name: "tone.wav", contentType: "audio/wav", size: 1024, url: "https://example.invalid/tone.wav" },
-    async () => {
-      throw new Error("Missing Permissions");
-    },
-  );
-  const originalFetch = globalThis.fetch;
   const originalConsoleError = console.error;
-
-  await execFileAsync(ffmpeg, [
-    "-y",
-    "-f", "lavfi",
-    "-i", "sine=frequency=440:duration=1",
-    tonePath,
-  ]);
-  globalThis.fetch = async () => new Response(await readFile(tonePath));
   console.error = () => {};
-  let registered = false;
-  try {
-    await handleMessage(message);
-    registered = existsSync(soundPath(userId));
-  } finally {
-    globalThis.fetch = originalFetch;
-    console.error = originalConsoleError;
-    await unlink(tonePath).catch(() => {});
-    await unlink(soundPath(userId)).catch(() => {});
-  }
 
-  assert.ok(registered, "入室音が登録されていること");
-  assert.deepEqual(replies, []);
+  // registerTone は登録済みファイルを確認してから実尺を読むため、戻ること自体が
+  // 「リアクションが失敗しても登録は完了している」ことの確認になる
+  try {
+    const { replies } = await registerTone("9876543215", 1, async () => {
+      throw new Error("Missing Permissions");
+    });
+    assert.deepEqual(replies, []);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
