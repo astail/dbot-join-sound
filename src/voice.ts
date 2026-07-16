@@ -26,7 +26,10 @@ export function getSession(guildId: string): Session | undefined {
   return sessions.get(guildId);
 }
 
-export async function joinChannel(channel: VoiceBasedChannel): Promise<Session> {
+export async function joinChannel(
+  channel: VoiceBasedChannel,
+  initialUserId?: string,
+): Promise<Session> {
   const guildId = channel.guild.id;
   const connection = joinVoiceChannel({
     channelId: channel.id,
@@ -65,6 +68,10 @@ export async function joinChannel(channel: VoiceBasedChannel): Promise<Session> 
       destroySession(guildId);
     }
   });
+
+  // 最初の入室者は Ready を待つ前にキューへ積む。待機中に後続の入室イベントが
+  // enqueue しても到着順が保たれる（Ready までは AutoPaused で再生保留される）
+  if (initialUserId) enqueue(session, initialUserId);
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
@@ -147,8 +154,7 @@ export async function handleVoiceStateUpdate(
     if (channel.type !== ChannelType.GuildVoice) return;
     if (channel.id === newState.guild.afkChannelId) return;
     if (!channel.joinable) return;
-    const created = await joinChannel(channel);
-    enqueue(created, newState.id);
+    await joinChannel(channel, newState.id);
   } else if (newState.channelId === session.channelId) {
     enqueue(session, newState.id);
   }

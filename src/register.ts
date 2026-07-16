@@ -1,6 +1,7 @@
 import { ChannelType, type Attachment, type Message } from "discord.js";
 import { execFile } from "node:child_process";
-import { unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -54,31 +55,37 @@ async function registerSound(
     return;
   }
 
-  const tmpPath = join(soundsDir, `${message.author.id}.upload`);
+  // 一意な一時パスで変換し、成功後に rename で置き換える
+  // （登録先へ直接出力すると変換途中の失敗で既存の音声が壊れる。同時登録の競合も防ぐ）
+  const tmpBase = join(soundsDir, `${message.author.id}.${randomUUID()}`);
+  const tmpInput = `${tmpBase}.upload`;
+  const tmpOutput = `${tmpBase}.tmp.ogg`;
   try {
     // 添付の CDN URL は期限付きなので受信直後にダウンロードする
     const res = await fetch(attachment.url);
     if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
-    await writeFile(tmpPath, Buffer.from(await res.arrayBuffer()));
+    await writeFile(tmpInput, Buffer.from(await res.arrayBuffer()));
 
     // 冒頭5秒でトリムし、パススルー再生できる 48kHz ogg/opus に統一変換
     await execFileAsync(ffmpeg, [
       "-y",
-      "-i", tmpPath,
+      "-i", tmpInput,
       "-t", "5",
       "-c:a", "libopus",
       "-b:a", "96k",
       "-ar", "48000",
       "-ac", "2",
-      soundPath(message.author.id),
+      tmpOutput,
     ]);
+    await rename(tmpOutput, soundPath(message.author.id));
 
     await message.reply("入室音を登録しました（冒頭5秒まで）。");
   } catch (err) {
     console.error("sound registration failed:", err);
     await message.reply("登録に失敗しました。別の音声ファイルで試してください。");
   } finally {
-    await unlink(tmpPath).catch(() => {});
+    await unlink(tmpInput).catch(() => {});
+    await unlink(tmpOutput).catch(() => {});
   }
 }
 
