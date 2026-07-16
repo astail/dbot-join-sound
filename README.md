@@ -49,14 +49,15 @@ docker compose down
 
 登録した音声は Docker の `sounds` ボリュームに保存され、コンテナを作り直しても保持されます。`docker compose down -v` を実行すると登録音声も削除されるため注意してください。
 
-再生音量はデフォルトで元音声の20%です。変更する場合は `.env` の `PLAYBACK_VOLUME` に `0.0`（無音）から `1.0`（元音量）までの値を指定してください。
+登録音の再生音量はデフォルトで元音声の40%、VOICEVOX の読み上げは80%です。登録音は `.env` の `PLAYBACK_VOLUME`、VOICEVOX の読み上げは `VOICEVOX_VOLUME` で個別に変更できます。どちらも `0.0`（無音）から `1.0`（元音量）までの値を指定してください。
 
 ### 環境変数
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
 | `DISCORD_TOKEN` | （必須） | Bot のトークン |
-| `PLAYBACK_VOLUME` | `0.2` | 再生音量（`0.0`〜`1.0`） |
+| `PLAYBACK_VOLUME` | `0.4` | 登録音の再生音量（`0.0`〜`1.0`） |
+| `VOICEVOX_VOLUME` | `0.8` | VOICEVOX 読み上げの再生音量（`0.0`〜`1.0`） |
 | `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID |
 | `VOICEVOX_URL` | `http://voicevox:50021` | VOICEVOX Engine の接続先 |
 | `VOICEVOX_TIMEOUT_MS` | `10000` | 音声合成のタイムアウト（ミリ秒） |
