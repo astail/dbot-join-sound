@@ -1,0 +1,13 @@
+services:
+  bot:
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN must be set in .env}
+    volumes:
+      - sounds:/app/sounds
+
+volumes:
+  sounds:
