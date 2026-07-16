@@ -12,7 +12,9 @@ import {
 } from "@discordjs/voice";
 import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import { createReadStream, existsSync } from "node:fs";
+import { Readable } from "node:stream";
 import { soundPath } from "./sounds.js";
+import { synthesizeJoinNotice } from "./voicevox.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.2;
 
@@ -30,10 +32,15 @@ export function resolvePlaybackVolume(value: string | undefined): number {
 
 const playbackVolume = resolvePlaybackVolume(process.env.PLAYBACK_VOLUME);
 
+// 登録済みなら音声ファイル、未登録なら読み上げる表示名
+type QueueItem = { path: string } | { displayName: string };
+
 type Session = {
   channelId: string;
   player: AudioPlayer;
-  queue: string[];
+  queue: QueueItem[];
+  // 音声合成を待つ間も player は Idle のままなので、再入して二重に再生しないための印
+  playing: boolean;
 };
 
 // guildId → Session（Bot が参加中の VC）
@@ -45,7 +52,7 @@ export function getSession(guildId: string): Session | undefined {
 
 export async function joinChannel(
   channel: VoiceBasedChannel,
-  initialUserId?: string,
+  initialJoiner?: { id: string; displayName: string | undefined },
 ): Promise<Session> {
   const guildId = channel.guild.id;
   const connection = joinVoiceChannel({
@@ -59,14 +66,19 @@ export async function joinChannel(
   const player = createAudioPlayer();
   connection.subscribe(player);
 
-  const session: Session = { channelId: channel.id, player, queue: [] };
+  const session: Session = {
+    channelId: channel.id,
+    player,
+    queue: [],
+    playing: false,
+  };
   // Ready を待つ間に別チャンネルへの参加が走らないよう、先にセッションを予約する
   sessions.set(guildId, session);
 
-  player.on(AudioPlayerStatus.Idle, () => playNext(session));
+  player.on(AudioPlayerStatus.Idle, () => void playNext(session));
   player.on("error", (err) => {
     console.error("audio player error:", err.message);
-    playNext(session);
+    void playNext(session);
   });
 
   // リスナーがないと error イベントでプロセスが落ちる
@@ -88,7 +100,9 @@ export async function joinChannel(
 
   // 最初の入室者は Ready を待つ前にキューへ積む。待機中に後続の入室イベントが
   // enqueue しても到着順が保たれる（Ready までは AutoPaused で再生保留される）
-  if (initialUserId) enqueue(session, initialUserId);
+  if (initialJoiner) {
+    enqueue(session, initialJoiner.id, initialJoiner.displayName);
+  }
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
@@ -114,19 +128,48 @@ function destroySession(guildId: string, expected?: Session): void {
   }
 }
 
-function enqueue(session: Session, userId: string): void {
+function enqueue(
+  session: Session,
+  userId: string,
+  displayName: string | undefined,
+): void {
   const path = soundPath(userId);
-  if (!existsSync(path)) return; // 未登録ユーザー
-  session.queue.push(path);
+  if (existsSync(path)) {
+    session.queue.push({ path });
+  } else if (displayName) {
+    session.queue.push({ displayName });
+  } else {
+    return; // 未登録で表示名も取れない
+  }
+
   if (session.player.state.status === AudioPlayerStatus.Idle) {
-    playNext(session);
+    void playNext(session);
   }
 }
 
-function playNext(session: Session): void {
-  const path = session.queue.shift();
-  if (!path) return;
-  session.player.play(createJoinSoundResource(path));
+// 合成に失敗した項目は飛ばして、次に再生できるものを探す
+async function playNext(session: Session): Promise<void> {
+  if (session.playing) return;
+  session.playing = true;
+  try {
+    for (let item = session.queue.shift(); item; item = session.queue.shift()) {
+      const resource = await createResource(item);
+      if (!resource) continue;
+      session.player.play(resource);
+      return; // 続きは Idle イベントが呼び出す
+    }
+  } catch (err) {
+    console.error("failed to play next:", err);
+  } finally {
+    session.playing = false;
+  }
+}
+
+async function createResource(item: QueueItem): Promise<AudioResource | null> {
+  if ("path" in item) return createJoinSoundResource(item.path);
+
+  const wav = await synthesizeJoinNotice(item.displayName);
+  return wav && createJoinNoticeResource(wav);
 }
 
 export function createJoinSoundResource(
@@ -137,6 +180,23 @@ export function createJoinSoundResource(
   // 入室音は最大8秒なので、変換コストより既存ファイルにも即時適用できることを優先する。
   const resource = createAudioResource(createReadStream(path), {
     inputType: StreamType.OggOpus,
+    inlineVolume: true,
+  });
+  if (!resource.volume) {
+    throw new Error("音量調整用のオーディオリソースを作成できませんでした");
+  }
+  resource.volume.setVolume(volume);
+  return resource;
+}
+
+export function createJoinNoticeResource(
+  wav: Buffer,
+  volume = playbackVolume,
+): AudioResource {
+  // VOICEVOX が返すのは 24kHz の WAV。Arbitrary にすると @discordjs/voice が
+  // ffmpeg 経由で opus へ変換するため、一時ファイルを作らずに済む
+  const resource = createAudioResource(Readable.from(wav), {
+    inputType: StreamType.Arbitrary,
     inlineVolume: true,
   });
   if (!resource.volume) {
@@ -191,9 +251,12 @@ export async function handleVoiceStateUpdate(
     if (channel.type !== ChannelType.GuildVoice) return;
     if (channel.id === newState.guild.afkChannelId) return;
     if (!channel.joinable) return;
-    await joinChannel(channel, newState.id);
+    await joinChannel(channel, {
+      id: newState.id,
+      displayName: newState.member?.displayName,
+    });
   } else if (newState.channelId === session.channelId) {
-    enqueue(session, newState.id);
+    enqueue(session, newState.id, newState.member?.displayName);
   }
   // 接続中に別チャンネルへ入った人は無視
 }
