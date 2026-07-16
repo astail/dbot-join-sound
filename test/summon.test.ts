@@ -56,7 +56,8 @@ test("参加中の同じVCからのメンションには使い方を返信する
   await handleMessage(createMention("vc-1", async (payload) => replies.push(payload)));
 
   assert.equal(replies.length, 1);
-  assert.match(String(replies[0]), /音声ファイルを添付してメンションすると/);
+  assert.match(String(replies[0]), /^使い方:/);
+  assert.match(String(replies[0]), /@Bot 音声ファイル    自分の入室音を登録/);
   assert.deepEqual(joinedChannelIds, []);
 });
 
@@ -86,6 +87,6 @@ test("VCに入っていないメンションには使い方を返信する", asy
   await handleMessage(createMention(null, async (payload) => replies.push(payload)));
 
   assert.equal(replies.length, 1);
-  assert.match(String(replies[0]), /音声ファイルを添付してメンションすると/);
+  assert.match(String(replies[0]), /^使い方:/);
   assert.deepEqual(joinedChannelIds, []);
 });

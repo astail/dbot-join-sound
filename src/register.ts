@@ -20,12 +20,15 @@ const ffmpeg: string = ffmpegPath;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_SOUND_SECONDS = 8;
 
-const USAGE =
-  `音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭${MAX_SOUND_SECONDS}秒まで）。` +
-  "「check」を付けてメンションすると登録済みの入室音を返します。" +
-  "「delete」を付けてメンションすると登録済みの入室音を削除します。" +
-  "「off」を付けてメンションすると入室音と読み上げを鳴らさなくなります（「on」で戻ります）。" +
-  "ボイスチャンネルに入った状態でメンションすると、その通話に参加します。";
+const USAGE = `使い方:
+\`\`\`
+@Bot 音声ファイル    自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭${MAX_SOUND_SECONDS}秒を使用）
+@Bot check            自分の入室音を確認
+@Bot delete           自分の入室音を削除
+@Bot off              自分の入室音・読み上げを無効化
+@Bot on               自分の入室音・読み上げを有効化
+@Bot                  自分がいる通話に参加
+\`\`\``;
 
 export async function handleMessage(message: Message): Promise<void> {
   if (message.author.bot || !message.inGuild()) return;
