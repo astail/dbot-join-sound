@@ -8,10 +8,27 @@ import {
   StreamType,
   VoiceConnectionStatus,
   type AudioPlayer,
+  type AudioResource,
 } from "@discordjs/voice";
 import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import { createReadStream, existsSync } from "node:fs";
 import { soundPath } from "./sounds.js";
+
+const DEFAULT_PLAYBACK_VOLUME = 0.6;
+
+export function resolvePlaybackVolume(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_PLAYBACK_VOLUME;
+  }
+
+  const volume = Number(value);
+  if (!Number.isFinite(volume) || volume < 0 || volume > 1) {
+    throw new Error("PLAYBACK_VOLUME は 0 以上 1 以下の数値で指定してください");
+  }
+  return volume;
+}
+
+const playbackVolume = resolvePlaybackVolume(process.env.PLAYBACK_VOLUME);
 
 type Session = {
   channelId: string;
@@ -109,10 +126,24 @@ function enqueue(session: Session, userId: string): void {
 function playNext(session: Session): void {
   const path = session.queue.shift();
   if (!path) return;
+  session.player.play(createJoinSoundResource(path));
+}
+
+export function createJoinSoundResource(
+  path: string,
+  volume = playbackVolume,
+): AudioResource {
+  // Opus を一度 PCM に戻して音量を調整するため、opusscript が必要。
+  // 入室音は最大5秒なので、変換コストより既存ファイルにも即時適用できることを優先する。
   const resource = createAudioResource(createReadStream(path), {
     inputType: StreamType.OggOpus,
+    inlineVolume: true,
   });
-  session.player.play(resource);
+  if (!resource.volume) {
+    throw new Error("音量調整用のオーディオリソースを作成できませんでした");
+  }
+  resource.volume.setVolume(volume);
+  return resource;
 }
 
 export async function handleVoiceStateUpdate(
