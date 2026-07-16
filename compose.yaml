@@ -4,11 +4,22 @@ services:
       context: .
     init: true
     restart: unless-stopped
+    depends_on:
+      - voicevox
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN must be set in .env}
       PLAYBACK_VOLUME: ${PLAYBACK_VOLUME:-0.2}
+      VOICEVOX_URL: ${VOICEVOX_URL:-http://voicevox:50021}
+      VOICEVOX_SPEAKER: ${VOICEVOX_SPEAKER:-3}
+      VOICEVOX_TIMEOUT_MS: ${VOICEVOX_TIMEOUT_MS:-10000}
     volumes:
       - sounds:/app/sounds
+
+  # 未登録ユーザーの入室読み上げ用。ポートは公開せず bot からのみ参照する
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-0.25.2
+    init: true
+    restart: unless-stopped
 
 volumes:
   sounds:
