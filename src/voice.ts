@@ -14,7 +14,7 @@ import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js
 import { createReadStream, existsSync } from "node:fs";
 import { soundPath } from "./sounds.js";
 
-const DEFAULT_PLAYBACK_VOLUME = 0.6;
+const DEFAULT_PLAYBACK_VOLUME = 0.2;
 
 export function resolvePlaybackVolume(value: string | undefined): number {
   if (value === undefined || value.trim() === "") {
