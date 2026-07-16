@@ -65,7 +65,7 @@ export async function joinChannel(
         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
       ]);
     } catch {
-      destroySession(guildId);
+      destroySession(guildId, session);
     }
   });
 
@@ -76,14 +76,16 @@ export async function joinChannel(
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
   } catch (err) {
-    destroySession(guildId);
+    destroySession(guildId, session);
     throw err;
   }
   return session;
 }
 
-function destroySession(guildId: string): void {
+function destroySession(guildId: string, expected?: Session): void {
   const session = sessions.get(guildId);
+  // 遅延実行される catch からの呼び出しで、後から作られた別セッションを壊さない
+  if (expected && session !== expected) return;
   sessions.delete(guildId);
   if (session) {
     session.queue.length = 0;
@@ -124,10 +126,14 @@ export async function handleVoiceStateUpdate(
     const session = sessions.get(guildId);
     if (!session) return;
     if (!newState.channelId) {
-      destroySession(guildId);
-    } else {
-      session.channelId = newState.channelId;
+      destroySession(guildId, session);
+      return;
     }
+    session.channelId = newState.channelId;
+    // 無人チャンネルへ移動させられた場合も「全員退出で即切断」に合わせて抜ける
+    const humans =
+      newState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
+    if (humans === 0) destroySession(guildId, session);
     return;
   }
 
@@ -141,7 +147,7 @@ export async function handleVoiceStateUpdate(
   if (session && oldState.channelId === session.channelId) {
     const humans =
       oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
-    if (humans === 0) destroySession(guildId);
+    if (humans === 0) destroySession(guildId, session);
     return;
   }
 

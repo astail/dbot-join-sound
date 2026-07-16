@@ -62,21 +62,28 @@ async function registerSound(
   const tmpOutput = `${tmpBase}.tmp.ogg`;
   try {
     // 添付の CDN URL は期限付きなので受信直後にダウンロードする
-    const res = await fetch(attachment.url);
+    const res = await fetch(attachment.url, {
+      signal: AbortSignal.timeout(30_000),
+    });
     if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
     await writeFile(tmpInput, Buffer.from(await res.arrayBuffer()));
 
     // 冒頭5秒でトリムし、パススルー再生できる 48kHz ogg/opus に統一変換
-    await execFileAsync(ffmpeg, [
-      "-y",
-      "-i", tmpInput,
-      "-t", "5",
-      "-c:a", "libopus",
-      "-b:a", "96k",
-      "-ar", "48000",
-      "-ac", "2",
-      tmpOutput,
-    ]);
+    // timeout: 破損ファイルで demuxer がハングしてもプロセスを残留させない
+    await execFileAsync(
+      ffmpeg,
+      [
+        "-y",
+        "-i", tmpInput,
+        "-t", "5",
+        "-c:a", "libopus",
+        "-b:a", "96k",
+        "-ar", "48000",
+        "-ac", "2",
+        tmpOutput,
+      ],
+      { timeout: 30_000 },
+    );
     await rename(tmpOutput, soundPath(message.author.id));
 
     await message.reply("入室音を登録しました（冒頭5秒まで）。");
