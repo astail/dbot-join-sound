@@ -41,6 +41,7 @@ type Session = {
   queue: QueueItem[];
   // 音声合成を待つ間も player は Idle のままなので、再入して二重に再生しないための印
   playing: boolean;
+  destroyed: boolean;
 };
 
 // guildId → Session（Bot が参加中の VC）
@@ -71,6 +72,7 @@ export async function joinChannel(
     player,
     queue: [],
     playing: false,
+    destroyed: false,
   };
   // Ready を待つ間に別チャンネルへの参加が走らないよう、先にセッションを予約する
   sessions.set(guildId, session);
@@ -119,6 +121,7 @@ function destroySession(guildId: string, expected?: Session): void {
   if (expected && session !== expected) return;
   sessions.delete(guildId);
   if (session) {
+    session.destroyed = true;
     session.queue.length = 0;
     session.player.stop(true);
   }
@@ -153,23 +156,24 @@ async function playNext(session: Session): Promise<void> {
   session.playing = true;
   try {
     for (let item = session.queue.shift(); item; item = session.queue.shift()) {
-      const resource = await createResource(item);
-      if (!resource) continue;
-      session.player.play(resource);
-      return; // 続きは Idle イベントが呼び出す
+      if ("path" in item) {
+        session.player.play(createJoinSoundResource(item.path));
+        return; // 続きは Idle イベントが呼び出す
+      }
+
+      const wav = await synthesizeJoinNotice(item.displayName);
+      // 合成を待つ間に全員退出していたら再生しない。購読者のいない player は
+      // AutoPaused のままになり、変換中の ffmpeg が終了しなくなる
+      if (session.destroyed) return;
+      if (!wav) continue;
+      session.player.play(createJoinNoticeResource(wav));
+      return;
     }
   } catch (err) {
     console.error("failed to play next:", err);
   } finally {
     session.playing = false;
   }
-}
-
-async function createResource(item: QueueItem): Promise<AudioResource | null> {
-  if ("path" in item) return createJoinSoundResource(item.path);
-
-  const wav = await synthesizeJoinNotice(item.displayName);
-  return wav && createJoinNoticeResource(wav);
 }
 
 export function createJoinSoundResource(

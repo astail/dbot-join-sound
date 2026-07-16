@@ -80,6 +80,7 @@ function voiceState(
   id: string,
   displayName: string | undefined,
   channelId: string | null,
+  remaining = 1,
 ): VoiceState {
   return {
     id,
@@ -92,9 +93,17 @@ function voiceState(
       type: ChannelType.GuildVoice,
       joinable: true,
       guild: { id: guildId, voiceAdapterCreator: () => ({}) },
-      members: { filter: () => ({ size: 1 }) },
+      members: { filter: () => ({ size: remaining }) },
     },
   } as unknown as VoiceState;
+}
+
+// VC から退出する（remaining=0 なら Bot も抜けてセッションが壊れる）
+async function leave(id: string): Promise<void> {
+  await handleVoiceStateUpdate(
+    voiceState(id, "アステル", "vc-1", 0),
+    voiceState(id, "アステル", null),
+  );
 }
 
 // 誰かが VC に入る
@@ -220,4 +229,23 @@ test("VOICEVOXが落ちていても後続の登録音は再生される", async 
     [StreamType.OggOpus],
     "読み上げだけ飛ばして次を再生する",
   );
+});
+
+test("合成待ちの最中に全員退出したら再生しない", async () => {
+  let release: (() => void) | undefined;
+  synthesis = async () => {
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return Buffer.from("wav");
+  };
+
+  await join("u-unregistered-6", "アステル");
+  await leave("u-unregistered-6");
+
+  release?.();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // 購読者のいない player で再生すると AutoPaused のまま ffmpeg が残ってしまう
+  assert.deepEqual(played, []);
 });
