@@ -6,8 +6,11 @@ import { ChannelType, type Message } from "discord.js";
 // 20 秒の接続タイムアウトを待つしかないため、voice モジュールごと差し替える
 let session: { channelId: string } | undefined;
 const joinedChannelIds: string[] = [];
+// exports は Node 24 で namedExports を置き換えた新オプションだが、engines と
+// Dockerfile が対象とする Node 22 では無視され、名前付き export が消えてしまう。
+// 非推奨警告は出るが、22 と 24 の両方で動く namedExports を使う
 mock.module("../src/voice.ts", {
-  exports: {
+  namedExports: {
     getSession: () => session,
     joinChannel: async (channel: { id: string }) => {
       joinedChannelIds.push(channel.id);
