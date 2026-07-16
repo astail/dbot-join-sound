@@ -134,7 +134,7 @@ export function createJoinSoundResource(
   volume = playbackVolume,
 ): AudioResource {
   // Opus を一度 PCM に戻して音量を調整するため、opusscript が必要。
-  // 入室音は最大5秒なので、変換コストより既存ファイルにも即時適用できることを優先する。
+  // 入室音は最大8秒なので、変換コストより既存ファイルにも即時適用できることを優先する。
   const resource = createAudioResource(createReadStream(path), {
     inputType: StreamType.OggOpus,
     inlineVolume: true,

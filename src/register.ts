@@ -18,9 +18,10 @@ if (!ffmpegPath) throw new Error("ffmpeg-static: ffmpeg binary not found");
 const ffmpeg: string = ffmpegPath;
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_SOUND_SECONDS = 8;
 
 const USAGE =
-  "音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭5秒まで）。" +
+  `音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭${MAX_SOUND_SECONDS}秒まで）。` +
   "「確認」を付けてメンションすると登録済みの入室音を返します。" +
   "ボイスチャンネルに入った状態でメンションすると、その通話に参加します。";
 
@@ -90,14 +91,14 @@ async function registerSound(
     if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
     await writeFile(tmpInput, Buffer.from(await res.arrayBuffer()));
 
-    // 冒頭5秒でトリムし、パススルー再生できる 48kHz ogg/opus に統一変換
+    // 冒頭 MAX_SOUND_SECONDS 秒でトリムし、パススルー再生できる 48kHz ogg/opus に統一変換
     // timeout: 破損ファイルで demuxer がハングしてもプロセスを残留させない
     await execFileAsync(
       ffmpeg,
       [
         "-y",
         "-i", tmpInput,
-        "-t", "5",
+        "-t", String(MAX_SOUND_SECONDS),
         "-c:a", "libopus",
         "-b:a", "96k",
         "-ar", "48000",
@@ -108,7 +109,7 @@ async function registerSound(
     );
     await rename(tmpOutput, soundPath(message.author.id));
 
-    await message.reply("入室音を登録しました（冒頭5秒まで）。");
+    await message.reply(`入室音を登録しました（冒頭${MAX_SOUND_SECONDS}秒まで）。`);
   } catch (err) {
     console.error("sound registration failed:", err);
     await message.reply("登録に失敗しました。別の音声ファイルで試してください。");
