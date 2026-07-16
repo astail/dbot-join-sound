@@ -23,6 +23,7 @@ const MAX_SOUND_SECONDS = 8;
 const USAGE =
   `音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭${MAX_SOUND_SECONDS}秒まで）。` +
   "「check」を付けてメンションすると登録済みの入室音を返します。" +
+  "「delete」を付けてメンションすると登録済みの入室音を削除します。" +
   "ボイスチャンネルに入った状態でメンションすると、その通話に参加します。";
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -31,12 +32,14 @@ export async function handleMessage(message: Message): Promise<void> {
   // （mentions.users は Bot のメッセージへの「返信」でも true になり誤発動するため使わない）
   if (!new RegExp(`<@!?${message.client.user.id}>`).test(message.content)) return;
 
-  const text = message.content.replace(/<@!?\d+>/g, "").trim();
+  const command = message.content.replace(/<@!?\d+>/g, "").trim().toLowerCase();
   const attachment = message.attachments.first();
   if (attachment) {
     await registerSound(message, attachment);
-  } else if (text.toLowerCase() === "check") {
+  } else if (command === "check") {
     await showSound(message);
+  } else if (command === "delete") {
+    await deleteSound(message);
   } else {
     await summonOrUsage(message);
   }
@@ -57,6 +60,31 @@ async function showSound(message: Message<true>): Promise<void> {
     console.error("failed to send registered sound:", err);
     await message.reply("入室音の送信に失敗しました。").catch(() => {});
   }
+}
+
+async function deleteSound(message: Message<true>): Promise<void> {
+  const path = soundPath(message.author.id);
+  if (!existsSync(path)) {
+    await message.reply("入室音は未登録です。音声ファイルを添付してメンションすると登録できます。");
+    return;
+  }
+
+  // 削除した音声を返信に添付することで、消してしまっても添付し直せば元に戻せる。
+  // そのため先に送信し、成功したときだけ削除する（順序を逆にすると、送信に失敗
+  // したときに手元へコピーが残らないまま消えてしまう）
+  try {
+    await message.reply({
+      content: "この入室音を削除しました。登録し直すには、この音声を添付してメンションしてください。",
+      files: [{ attachment: path, name: "join-sound.ogg" }],
+    });
+  } catch (err) {
+    console.error("failed to send deleted sound:", err);
+    await message.reply("入室音の送信に失敗したため、削除していません。").catch(() => {});
+    return;
+  }
+  await unlink(path).catch((err) => {
+    console.error("failed to delete sound:", err);
+  });
 }
 
 const AUDIO_EXTENSION = /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus|webm|mka)$/i;
