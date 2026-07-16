@@ -1,6 +1,7 @@
 import { ChannelType, type Attachment, type Message } from "discord.js";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 const USAGE =
   "音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭5秒まで）。" +
+  "「確認」を付けてメンションすると登録済みの入室音を返します。" +
   "ボイスチャンネルに入った状態でメンションすると、その通話に参加します。";
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -28,11 +30,31 @@ export async function handleMessage(message: Message): Promise<void> {
   // （mentions.users は Bot のメッセージへの「返信」でも true になり誤発動するため使わない）
   if (!new RegExp(`<@!?${message.client.user.id}>`).test(message.content)) return;
 
+  const text = message.content.replace(/<@!?\d+>/g, "").trim();
   const attachment = message.attachments.first();
   if (attachment) {
     await registerSound(message, attachment);
+  } else if (text === "確認") {
+    await showSound(message);
   } else {
     await summonOrUsage(message);
+  }
+}
+
+async function showSound(message: Message<true>): Promise<void> {
+  const path = soundPath(message.author.id);
+  if (!existsSync(path)) {
+    await message.reply("入室音は未登録です。音声ファイルを添付してメンションすると登録できます。");
+    return;
+  }
+  try {
+    await message.reply({
+      content: "登録されている入室音です。",
+      files: [{ attachment: path, name: "join-sound.ogg" }],
+    });
+  } catch (err) {
+    console.error("failed to send registered sound:", err);
+    await message.reply("入室音の送信に失敗しました。").catch(() => {});
   }
 }
 
