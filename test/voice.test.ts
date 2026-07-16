@@ -5,9 +5,9 @@ import test from "node:test";
 import { soundsDir } from "../src/sounds.ts";
 import { createJoinSoundResource, resolvePlaybackVolume } from "../src/voice.ts";
 
-test("再生音量のデフォルトは60%", () => {
-  assert.equal(resolvePlaybackVolume(undefined), 0.6);
-  assert.equal(resolvePlaybackVolume(""), 0.6);
+test("再生音量のデフォルトは20%", () => {
+  assert.equal(resolvePlaybackVolume(undefined), 0.2);
+  assert.equal(resolvePlaybackVolume(""), 0.2);
 });
 
 test("再生音量は0から1の範囲で変更できる", () => {
@@ -26,8 +26,8 @@ test("オーディオリソースへ再生音量を設定する", async () => {
   const path = join(soundsDir, "volume-test.ogg");
   await writeFile(path, "");
   try {
-    const resource = createJoinSoundResource(path, 0.6);
-    assert.equal(resource.volume?.volume, 0.6);
+    const resource = createJoinSoundResource(path, 0.2);
+    assert.equal(resource.volume?.volume, 0.2);
     resource.playStream.destroy();
   } finally {
     await unlink(path).catch(() => {});
