@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN must be set in .env}
+      PLAYBACK_VOLUME: ${PLAYBACK_VOLUME:-0.6}
     volumes:
       - sounds:/app/sounds
 

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "node --env-file=.env --watch --import tsx src/index.ts",
-    "test": "node --import tsx --test test/register.test.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js"
   },
@@ -16,7 +16,8 @@
     "@discordjs/voice": "^0.19.2",
     "@snazzah/davey": "^0.1.12",
     "discord.js": "^14.27.0",
-    "ffmpeg-static": "^5.3.0"
+    "ffmpeg-static": "^5.3.0",
+    "opusscript": "0.0.8"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
