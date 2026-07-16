@@ -16,21 +16,35 @@ import { Readable } from "node:stream";
 import { offPath, soundPath } from "./sounds.js";
 import { synthesizeJoinNotice } from "./voicevox.js";
 
-const DEFAULT_PLAYBACK_VOLUME = 0.2;
+const DEFAULT_PLAYBACK_VOLUME = 0.4;
+const DEFAULT_VOICEVOX_VOLUME = 0.8;
 
-export function resolvePlaybackVolume(value: string | undefined): number {
+function resolveVolume(
+  value: string | undefined,
+  variableName: string,
+  defaultVolume: number,
+): number {
   if (value === undefined || value.trim() === "") {
-    return DEFAULT_PLAYBACK_VOLUME;
+    return defaultVolume;
   }
 
   const volume = Number(value);
   if (!Number.isFinite(volume) || volume < 0 || volume > 1) {
-    throw new Error("PLAYBACK_VOLUME は 0 以上 1 以下の数値で指定してください");
+    throw new Error(`${variableName} は 0 以上 1 以下の数値で指定してください`);
   }
   return volume;
 }
 
+export function resolvePlaybackVolume(value: string | undefined): number {
+  return resolveVolume(value, "PLAYBACK_VOLUME", DEFAULT_PLAYBACK_VOLUME);
+}
+
+export function resolveVoicevoxVolume(value: string | undefined): number {
+  return resolveVolume(value, "VOICEVOX_VOLUME", DEFAULT_VOICEVOX_VOLUME);
+}
+
 const playbackVolume = resolvePlaybackVolume(process.env.PLAYBACK_VOLUME);
+const voicevoxVolume = resolveVoicevoxVolume(process.env.VOICEVOX_VOLUME);
 
 // 登録済みなら音声ファイル、未登録なら読み上げる表示名
 type QueueItem = { path: string } | { displayName: string };
@@ -198,7 +212,7 @@ export function createJoinSoundResource(
 
 export function createJoinNoticeResource(
   wav: Buffer,
-  volume = playbackVolume,
+  volume = voicevoxVolume,
 ): AudioResource {
   // VOICEVOX が返すのは 24kHz の WAV。Arbitrary にすると @discordjs/voice が
   // ffmpeg 経由で opus へ変換するため、一時ファイルを作らずに済む
