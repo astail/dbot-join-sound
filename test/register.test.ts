@@ -317,3 +317,112 @@ test("contentTypeがなくても拡張子が音声なら登録する", async () 
     await unlink(tonePath).catch(() => {});
   }
 });
+
+test("deleteで登録音を削除し、削除した音声を添付して返す", async () => {
+  const userId = "9876543230";
+  const replies: unknown[] = [];
+  const message = createMessage(
+    `<@${botId}> delete`,
+    userId,
+    async (payload) => replies.push(payload),
+  );
+
+  await writeFile(soundPath(userId), "ogg");
+  let stillRegistered = true;
+  try {
+    await handleMessage(message);
+    stillRegistered = existsSync(soundPath(userId));
+  } finally {
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  assert.deepEqual(replies, [
+    {
+      content:
+        "この入室音を削除しました。登録し直すには、この音声を添付してメンションしてください。",
+      files: [{ attachment: soundPath(userId), name: "join-sound.ogg" }],
+    },
+  ]);
+  assert.equal(stillRegistered, false, "入室音が削除されていること");
+});
+
+test("大文字を含むDeleteでも削除できる", async () => {
+  const userId = "9876543231";
+  const message = createMessage(`<@${botId}> Delete`, userId, async () => {});
+
+  await writeFile(soundPath(userId), "ogg");
+  let stillRegistered = true;
+  try {
+    await handleMessage(message);
+    stillRegistered = existsSync(soundPath(userId));
+  } finally {
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  assert.equal(stillRegistered, false);
+});
+
+test("未登録でdeleteしても失敗しない", async () => {
+  const replies: unknown[] = [];
+  const message = createMessage(
+    `<@${botId}> delete`,
+    "9876543232",
+    async (payload) => replies.push(payload),
+  );
+
+  await handleMessage(message);
+
+  assert.deepEqual(replies, [
+    "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。",
+  ]);
+});
+
+test("添付送信に失敗したら削除しない", async () => {
+  const userId = "9876543233";
+  const replies: unknown[] = [];
+  const message = createMessage(
+    `<@${botId}> delete`,
+    userId,
+    async (payload) => {
+      replies.push(payload);
+      if (replies.length === 1) throw new Error("missing ATTACH_FILES");
+    },
+  );
+  const originalConsoleError = console.error;
+
+  await writeFile(soundPath(userId), "ogg");
+  console.error = () => {};
+  let stillRegistered = false;
+  try {
+    await handleMessage(message);
+    stillRegistered = existsSync(soundPath(userId));
+  } finally {
+    console.error = originalConsoleError;
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  // 送信できないと復元用のコピーが手元に残らないため、削除してはいけない
+  assert.equal(stillRegistered, true, "入室音が残っていること");
+  assert.equal(replies[1], "入室音の送信に失敗したため、削除していません。");
+});
+
+test("delete後にcheckすると未登録として扱われる", async () => {
+  const userId = "9876543234";
+  const replies: unknown[] = [];
+  const reply = async (payload: unknown) => {
+    replies.push(payload);
+  };
+
+  await writeFile(soundPath(userId), "ogg");
+  try {
+    await handleMessage(createMessage(`<@${botId}> delete`, userId, reply));
+    await handleMessage(createMessage(`<@${botId}> check`, userId, reply));
+  } finally {
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  assert.equal(
+    replies[1],
+    "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。",
+  );
+});
