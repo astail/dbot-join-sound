@@ -128,9 +128,10 @@ async function summonOrUsage(message: Message<true>): Promise<void> {
 
   const session = getSession(message.guildId);
   if (session) {
-    if (session.channelId !== voiceChannel.id) {
-      await message.reply("いまは別の通話に参加中です。");
-    }
+    // 参加済みの VC からのメンションは召喚が不要なので、無反応にせず使い方を返す
+    await message.reply(
+      session.channelId === voiceChannel.id ? USAGE : "いまは別の通話に参加中です。",
+    );
     return;
   }
 
