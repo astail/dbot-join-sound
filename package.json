@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "node --env-file=.env --watch --import tsx src/index.ts",
+    "test": "node --import tsx --test test/register.test.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js"
   },
