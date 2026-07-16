@@ -3,7 +3,7 @@ import { unlink, writeFile } from "node:fs/promises";
 import test, { after, beforeEach, mock } from "node:test";
 import { AudioPlayerStatus, StreamType } from "@discordjs/voice";
 import { ChannelType, type VoiceState } from "discord.js";
-import { soundPath } from "../src/sounds.ts";
+import { offPath, soundPath } from "../src/sounds.ts";
 
 // 実際の再生には Discord への音声接続が要るため、player と connection だけ差し替える。
 // 判定ロジック（enqueue / playNext）は本物を通す
@@ -69,6 +69,12 @@ async function registerSound(userId: string): Promise<string> {
   const path = soundPath(userId);
   await writeFile(path, "ogg");
   registeredPaths.push(path);
+  return userId;
+}
+
+async function turnOff(userId: string): Promise<string> {
+  await writeFile(offPath(userId), "");
+  registeredPaths.push(offPath(userId));
   return userId;
 }
 
@@ -248,4 +254,46 @@ test("合成待ちの最中に全員退出したら再生しない", async () =>
 
   // 購読者のいない player で再生すると AutoPaused のまま ffmpeg が残ってしまう
   assert.deepEqual(played, []);
+});
+
+test("offにした人は登録音があっても鳴らない", async () => {
+  const userId = await registerSound("u-off-1");
+  await turnOff(userId);
+
+  await join(userId, "アステル");
+
+  assert.deepEqual(played, []);
+  assert.deepEqual(synthesized, [], "合成も試みない");
+});
+
+test("offにした人は未登録でも読み上げられない", async () => {
+  const userId = await turnOff("u-off-2");
+
+  await join(userId, "アステル");
+
+  assert.deepEqual(played, []);
+  assert.deepEqual(synthesized, []);
+});
+
+test("offにした人が最初に入室してもBotは参加する", async () => {
+  const userId = await turnOff("u-off-3");
+
+  await join(userId, "アステル");
+
+  // 参加はするので、次に入った人の入室音は鳴らせる
+  const other = await registerSound("u-off-4");
+  await join(other, "ほか");
+
+  assert.deepEqual(played.map((r) => r.inputType), [StreamType.OggOpus]);
+});
+
+test("offは他の人の入室音に影響しない", async () => {
+  const muted = await turnOff("u-off-5");
+  const other = await registerSound("u-off-6");
+
+  await join(other, "ほか");
+  await join(muted, "アステル");
+  await finishPlayback();
+
+  assert.deepEqual(played.map((r) => r.inputType), [StreamType.OggOpus]);
 });

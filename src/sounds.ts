@@ -10,3 +10,9 @@ mkdirSync(soundsDir, { recursive: true });
 export function soundPath(userId: string): string {
   return join(soundsDir, `${userId}.ogg`);
 }
+
+// 「鳴らしてほしくない」ことを示す空ファイル。登録音の有無と同じくファイルの
+// 有無で表現し、sounds ボリュームに載せてコンテナを作り直しても保持する
+export function offPath(userId: string): string {
+  return join(soundsDir, `${userId}.off`);
+}
