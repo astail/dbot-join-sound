@@ -21,6 +21,7 @@ function createMessage(
   userId: string,
   reply: (payload: unknown) => Promise<unknown>,
   attachment?: unknown,
+  react?: (emoji: string) => Promise<unknown>,
 ): Message {
   return {
     author: { bot: false, id: userId },
@@ -31,6 +32,7 @@ function createMessage(
     member: { voice: { channel: null } },
     guildId: "test-guild",
     reply,
+    react,
   } as unknown as Message;
 }
 
@@ -42,11 +44,11 @@ async function readDurationSeconds(path: string): Promise<number> {
   return Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]);
 }
 
-// 指定秒数のサイン波を添付として登録させ、Bot の返信と保存された入室音の実尺を返す
+// 指定秒数のサイン波を添付として登録させ、Bot の反応と保存された入室音の実尺を返す
 async function registerTone(
   userId: string,
   seconds: number,
-): Promise<{ replies: unknown[]; duration: number }> {
+): Promise<{ replies: unknown[]; reactions: string[]; duration: number }> {
   const tonePath = join(soundsDir, `tone-${userId}.wav`);
   await execFileAsync(ffmpeg, [
     "-y",
@@ -56,6 +58,7 @@ async function registerTone(
   ]);
 
   const replies: unknown[] = [];
+  const reactions: string[] = [];
   const originalFetch = globalThis.fetch;
   const message = createMessage(
     `<@${botId}>`,
@@ -67,6 +70,7 @@ async function registerTone(
       size: 1024,
       url: "https://example.invalid/tone.wav",
     },
+    async (emoji) => reactions.push(emoji),
   );
   globalThis.fetch = async () => new Response(await readFile(tonePath));
   try {
@@ -74,7 +78,11 @@ async function registerTone(
     if (!existsSync(soundPath(userId))) {
       throw new Error(`registration failed: ${replies.join(" / ")}`);
     }
-    return { replies, duration: await readDurationSeconds(soundPath(userId)) };
+    return {
+      replies,
+      reactions,
+      duration: await readDurationSeconds(soundPath(userId)),
+    };
   } finally {
     globalThis.fetch = originalFetch;
     await unlink(tonePath).catch(() => {});
@@ -150,8 +158,48 @@ test("8秒を超える音声は冒頭8秒で切り詰められる", async () => 
   assert.ok(Math.abs(duration - 8) < 0.5, `expected about 8s, got ${duration}s`);
 });
 
-test("登録完了メッセージが最大8秒を示す", async () => {
-  const { replies } = await registerTone("9876543214", 1);
+test("登録が完了したらリアクションだけを付けて返信しない", async () => {
+  const { replies, reactions } = await registerTone("9876543214", 1);
 
-  assert.deepEqual(replies, ["入室音を登録しました（冒頭8秒まで）。"]);
+  assert.deepEqual(reactions, ["✅"]);
+  assert.deepEqual(replies, []);
+});
+
+test("リアクションを付けられなくても登録失敗として扱わない", async () => {
+  const userId = "9876543215";
+  const tonePath = join(soundsDir, `tone-${userId}.wav`);
+  const replies: unknown[] = [];
+  const message = createMessage(
+    `<@${botId}>`,
+    userId,
+    async (payload) => replies.push(payload),
+    { name: "tone.wav", contentType: "audio/wav", size: 1024, url: "https://example.invalid/tone.wav" },
+    async () => {
+      throw new Error("Missing Permissions");
+    },
+  );
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+
+  await execFileAsync(ffmpeg, [
+    "-y",
+    "-f", "lavfi",
+    "-i", "sine=frequency=440:duration=1",
+    tonePath,
+  ]);
+  globalThis.fetch = async () => new Response(await readFile(tonePath));
+  console.error = () => {};
+  let registered = false;
+  try {
+    await handleMessage(message);
+    registered = existsSync(soundPath(userId));
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
+    await unlink(tonePath).catch(() => {});
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  assert.ok(registered, "入室音が登録されていること");
+  assert.deepEqual(replies, []);
 });

@@ -108,15 +108,20 @@ async function registerSound(
       { timeout: 30_000 },
     );
     await rename(tmpOutput, soundPath(message.author.id));
-
-    await message.reply(`入室音を登録しました（冒頭${MAX_SOUND_SECONDS}秒まで）。`);
   } catch (err) {
     console.error("sound registration failed:", err);
     await message.reply("登録に失敗しました。別の音声ファイルで試してください。");
+    return;
   } finally {
     await unlink(tmpInput).catch(() => {});
     await unlink(tmpOutput).catch(() => {});
   }
+
+  // 登録は完了しているので、リアクションを付けられなくても（Add Reactions 権限が
+  // ない等）失敗扱いにしない
+  await message.react("✅").catch((err) => {
+    console.error("failed to react to registration:", err);
+  });
 }
 
 async function summonOrUsage(message: Message<true>): Promise<void> {

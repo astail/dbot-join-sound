@@ -4,7 +4,7 @@
 
 ## 機能
 
-- **入室音の登録**: Bot を直接 @メンションして音声ファイルを添付すると、送信者の入室音として登録（冒頭8秒でトリム、再登録は上書き）
+- **入室音の登録**: Bot を直接 @メンションして音声ファイルを添付すると、送信者の入室音として登録（冒頭8秒でトリム、再登録は上書き）。完了は ✅ リアクションで通知
 - **登録音の確認**: 「確認」を付けて @メンションすると、登録済みの入室音をリプライで返す
 - **自動参加**: 未接続時に誰かが VC に入ると、その VC に自動参加して本人の入室音も再生
 - **参加後は移動しない**: Bot のいるチャンネルに入った人の入室音だけ再生。他の VC への入室は無視
@@ -20,10 +20,12 @@
 3. 以下の URL でサーバーに招待（`CLIENT_ID` は置き換え）:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot&permissions=3214336
+https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot&permissions=3214400
 ```
 
-（権限: View Channels / Send Messages / Read Message History / Connect / Speak）
+（権限: View Channels / Send Messages / Add Reactions / Read Message History / Connect / Speak）
+
+Add Reactions は登録完了を ✅ で示すために必要です。この権限を追加する前に招待した Bot は、登録は成功してもリアクションが付かないため、上記 URL で招待し直してください。
 
 ### 2. Docker Compose で起動
 
@@ -57,7 +59,7 @@ Node.js 22.12 以上が必要。ffmpeg は `ffmpeg-static` 同梱のため別途
 
 ## 使い方
 
-- `@Bot` + 音声ファイル添付 → 入室音を登録
+- `@Bot` + 音声ファイル添付 → 入室音を登録（完了すると ✅ が付く）
 - `@Bot 確認` → 登録済みの入室音がリプライで返る
 - VC に入って `@Bot` → 通話に呼ぶ
 - 登録済みの人が VC に入ると入室音が鳴る
