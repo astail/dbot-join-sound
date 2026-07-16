@@ -55,7 +55,7 @@ docker compose down
 | --- | --- | --- |
 | `DISCORD_TOKEN` | （必須） | Bot のトークン |
 | `PLAYBACK_VOLUME` | `0.2` | 再生音量（`0.0`〜`1.0`） |
-| `VOICEVOX_SPEAKER` | `3` | 読み上げの話者 ID |
+| `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID |
 | `VOICEVOX_URL` | `http://voicevox:50021` | VOICEVOX Engine の接続先 |
 | `VOICEVOX_TIMEOUT_MS` | `10000` | 音声合成のタイムアウト（ミリ秒） |
 
@@ -91,4 +91,4 @@ Node.js 22.12 以上が必要。ffmpeg は `ffmpeg-static` 同梱のため別途
 
 VOICEVOX の[利用規約](https://voicevox.hiroshiba.jp/term/)により、生成した音声を利用する際は VOICEVOX を利用したことがわかるクレジット表記が必要です。加えて、話者ごとに個別の規約があります。`VOICEVOX_SPEAKER` で変更する場合は、その音声ライブラリの規約も確認してください。
 
-デフォルトの話者は VOICEVOX:ずんだもん（話者 ID 3）です。
+デフォルトの話者は VOICEVOX:冥鳴ひまり（話者 ID 14）です。[冥鳴ひまりの利用規約](https://meimeihimari.wixsite.com/himari/terms-of-use)も確認してください。
