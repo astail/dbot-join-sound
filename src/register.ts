@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { offPath, soundPath, soundsDir } from "./sounds.js";
-import { getSession, joinChannel } from "./voice.js";
+import { getSession, joinChannel, leaveChannel } from "./voice.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -29,7 +29,8 @@ ${bot} check            自分の入室音を確認
 ${bot} delete           自分の入室音を削除
 ${bot} off              自分の入室音・読み上げを無効化
 ${bot} on               自分の入室音・読み上げを有効化
-${bot}                  自分がいる通話に参加
+${bot} join             自分がいる通話に参加
+${bot} leave            参加中の通話から退出
 \`\`\``;
 }
 
@@ -51,8 +52,12 @@ export async function handleMessage(message: Message): Promise<void> {
     await turnOff(message);
   } else if (command === "on") {
     await turnOn(message);
+  } else if (command === "join") {
+    await joinCurrentChannel(message);
+  } else if (command === "leave") {
+    await leaveCurrentChannel(message);
   } else {
-    await summonOrUsage(message);
+    await message.reply(createUsage(message.client.user.username));
   }
 }
 
@@ -199,19 +204,19 @@ async function registerSound(
   }
 }
 
-async function summonOrUsage(message: Message<true>): Promise<void> {
-  const usage = createUsage(message.client.user.username);
+async function joinCurrentChannel(message: Message<true>): Promise<void> {
   const voiceChannel = message.member?.voice.channel;
   if (!voiceChannel) {
-    await message.reply(usage);
+    await message.reply(createUsage(message.client.user.username));
     return;
   }
 
   const session = getSession(message.guildId);
   if (session) {
-    // 参加済みの VC からのメンションは召喚が不要なので、無反応にせず使い方を返す
     await message.reply(
-      session.channelId === voiceChannel.id ? usage : "いまは別の通話に参加中です。",
+      session.channelId === voiceChannel.id
+        ? "すでにこの通話に参加しています。"
+        : "いまは別の通話に参加中です。",
     );
     return;
   }
@@ -228,4 +233,12 @@ async function summonOrUsage(message: Message<true>): Promise<void> {
     console.error("failed to join via mention:", err);
     await message.reply("通話への参加に失敗しました。");
   }
+}
+
+async function leaveCurrentChannel(message: Message<true>): Promise<void> {
+  if (!leaveChannel(message.guildId)) {
+    await message.reply("通話に参加していません。");
+    return;
+  }
+  await message.reply("通話から退出しました。");
 }
