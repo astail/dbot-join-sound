@@ -6,7 +6,7 @@ import { rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { soundPath, soundsDir } from "./sounds.js";
+import { offPath, soundPath, soundsDir } from "./sounds.js";
 import { getSession, joinChannel } from "./voice.js";
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +24,7 @@ const USAGE =
   `音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭${MAX_SOUND_SECONDS}秒まで）。` +
   "「check」を付けてメンションすると登録済みの入室音を返します。" +
   "「delete」を付けてメンションすると登録済みの入室音を削除します。" +
+  "「off」を付けてメンションすると入室音と読み上げを鳴らさなくなります（「on」で戻ります）。" +
   "ボイスチャンネルに入った状態でメンションすると、その通話に参加します。";
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -40,20 +41,31 @@ export async function handleMessage(message: Message): Promise<void> {
     await showSound(message);
   } else if (command === "delete") {
     await deleteSound(message);
+  } else if (command === "off") {
+    await turnOff(message);
+  } else if (command === "on") {
+    await turnOn(message);
   } else {
     await summonOrUsage(message);
   }
 }
 
 async function showSound(message: Message<true>): Promise<void> {
+  const isOff = existsSync(offPath(message.author.id));
   const path = soundPath(message.author.id);
   if (!existsSync(path)) {
-    await message.reply("入室音は未登録です。音声ファイルを添付してメンションすると登録できます。");
+    await message.reply(
+      isOff
+        ? "入室音は未登録で、鳴らさない設定です。「on」を付けてメンションすると読み上げが戻ります。"
+        : "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。",
+    );
     return;
   }
   try {
     await message.reply({
-      content: "登録されている入室音です。",
+      content: isOff
+        ? "鳴らさない設定です。保持されている入室音はこちらです。「on」を付けてメンションすると鳴るようになります。"
+        : "登録されている入室音です。",
       files: [{ attachment: path, name: "join-sound.ogg" }],
     });
   } catch (err) {
@@ -85,6 +97,26 @@ async function deleteSound(message: Message<true>): Promise<void> {
   await unlink(path).catch((err) => {
     console.error("failed to delete sound:", err);
   });
+}
+
+async function turnOff(message: Message<true>): Promise<void> {
+  const path = offPath(message.author.id);
+  if (existsSync(path)) {
+    await message.reply("すでに鳴らさない設定です。「on」を付けてメンションすると戻ります。");
+    return;
+  }
+  await writeFile(path, "");
+  await message.reply("入室音と読み上げを鳴らさないようにしました。登録した音声は保持されます。");
+}
+
+async function turnOn(message: Message<true>): Promise<void> {
+  const path = offPath(message.author.id);
+  if (!existsSync(path)) {
+    await message.reply("すでに鳴らす設定です。");
+    return;
+  }
+  await unlink(path);
+  await message.reply("入室音を鳴らすようにしました。");
 }
 
 const AUDIO_EXTENSION = /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus|webm|mka)$/i;
@@ -150,6 +182,15 @@ async function registerSound(
   await message.react("✅").catch((err) => {
     console.error("failed to react to registration:", err);
   });
+
+  // 登録は「鳴らしてほしい」という意思表示なので off を解除する。リアクションだけ
+  // では解除が伝わらず、鳴らない原因が見えなくなるためここは返信する
+  if (existsSync(offPath(message.author.id))) {
+    await unlink(offPath(message.author.id)).catch((err) => {
+      console.error("failed to clear off marker:", err);
+    });
+    await message.reply("鳴らさない設定を解除しました。");
+  }
 }
 
 async function summonOrUsage(message: Message<true>): Promise<void> {

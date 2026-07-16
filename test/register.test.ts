@@ -8,7 +8,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import type { Message } from "discord.js";
 import { handleMessage } from "../src/register.ts";
-import { soundPath, soundsDir } from "../src/sounds.ts";
+import { offPath, soundPath, soundsDir } from "../src/sounds.ts";
 
 const botId = "1234567890";
 
@@ -425,4 +425,141 @@ test("delete後にcheckすると未登録として扱われる", async () => {
     replies[1],
     "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。",
   );
+});
+
+// off / on コマンドを送って Bot の返信を得る
+async function sendCommand(userId: string, command: string): Promise<unknown[]> {
+  const replies: unknown[] = [];
+  await handleMessage(
+    createMessage(`<@${botId}> ${command}`, userId, async (payload) => {
+      replies.push(payload);
+    }),
+  );
+  return replies;
+}
+
+test("offで鳴らさない設定になり、登録音は保持される", async () => {
+  const userId = "9876543240";
+  await writeFile(soundPath(userId), "ogg");
+  let marked = false;
+  let soundKept = false;
+  try {
+    const replies = await sendCommand(userId, "off");
+    marked = existsSync(offPath(userId));
+    soundKept = existsSync(soundPath(userId));
+    assert.deepEqual(replies, [
+      "入室音と読み上げを鳴らさないようにしました。登録した音声は保持されます。",
+    ]);
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  assert.equal(marked, true, "off マーカーが作られること");
+  assert.equal(soundKept, true, "登録音は消さないこと");
+});
+
+test("onで鳴らす設定に戻る", async () => {
+  const userId = "9876543241";
+  let cleared = true;
+  try {
+    await sendCommand(userId, "off");
+    const replies = await sendCommand(userId, "on");
+    cleared = existsSync(offPath(userId));
+    assert.deepEqual(replies, ["入室音を鳴らすようにしました。"]);
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+  }
+
+  assert.equal(cleared, false, "off マーカーが消えること");
+});
+
+test("大文字を含むOff/Onでも動作する", async () => {
+  const userId = "9876543242";
+  let afterOff = false;
+  let afterOn = true;
+  try {
+    await sendCommand(userId, "Off");
+    afterOff = existsSync(offPath(userId));
+    await sendCommand(userId, "ON");
+    afterOn = existsSync(offPath(userId));
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+  }
+
+  assert.equal(afterOff, true);
+  assert.equal(afterOn, false);
+});
+
+test("すでにoff/onの状態で実行しても失敗せず現在の状態を返す", async () => {
+  const userId = "9876543243";
+  try {
+    await sendCommand(userId, "off");
+    const offAgain = await sendCommand(userId, "off");
+    assert.deepEqual(offAgain, [
+      "すでに鳴らさない設定です。「on」を付けてメンションすると戻ります。",
+    ]);
+
+    await sendCommand(userId, "on");
+    const onAgain = await sendCommand(userId, "on");
+    assert.deepEqual(onAgain, ["すでに鳴らす設定です。"]);
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+  }
+});
+
+test("off中に登録すると鳴らさない設定が解除される", async () => {
+  const userId = "9876543244";
+  await writeFile(offPath(userId), "");
+  let stillOff = true;
+  try {
+    const { replies, reactions } = await registerTone(userId, 1);
+    stillOff = existsSync(offPath(userId));
+    assert.deepEqual(reactions, ["✅"]);
+    assert.deepEqual(replies, ["鳴らさない設定を解除しました。"]);
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+  }
+
+  assert.equal(stillOff, false, "off が解除されること");
+});
+
+test("off中のcheckは鳴らさない設定である旨と保持中の音声を返す", async () => {
+  const userId = "9876543245";
+  await writeFile(soundPath(userId), "ogg");
+  await writeFile(offPath(userId), "");
+  const replies: unknown[] = [];
+  try {
+    await handleMessage(
+      createMessage(`<@${botId}> check`, userId, async (p) => {
+        replies.push(p);
+      }),
+    );
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+    await unlink(soundPath(userId)).catch(() => {});
+  }
+
+  assert.deepEqual(replies, [
+    {
+      content:
+        "鳴らさない設定です。保持されている入室音はこちらです。「on」を付けてメンションすると鳴るようになります。",
+      files: [{ attachment: soundPath(userId), name: "join-sound.ogg" }],
+    },
+  ]);
+});
+
+test("未登録でoff中のcheckは未登録かつ鳴らさない設定である旨を返す", async () => {
+  const userId = "9876543246";
+  await writeFile(offPath(userId), "");
+  let replies: unknown[] = [];
+  try {
+    replies = await sendCommand(userId, "check");
+  } finally {
+    await unlink(offPath(userId)).catch(() => {});
+  }
+
+  assert.deepEqual(replies, [
+    "入室音は未登録で、鳴らさない設定です。「on」を付けてメンションすると読み上げが戻ります。",
+  ]);
 });

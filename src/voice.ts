@@ -13,7 +13,7 @@ import {
 import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import { createReadStream, existsSync } from "node:fs";
 import { Readable } from "node:stream";
-import { soundPath } from "./sounds.js";
+import { offPath, soundPath } from "./sounds.js";
 import { synthesizeJoinNotice } from "./voicevox.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.2;
@@ -136,6 +136,9 @@ function enqueue(
   userId: string,
   displayName: string | undefined,
 ): void {
+  // off にした人は登録音も読み上げも鳴らさないため、分岐より前で弾く
+  if (existsSync(offPath(userId))) return;
+
   const path = soundPath(userId);
   if (existsSync(path)) {
     session.queue.push({ path });
