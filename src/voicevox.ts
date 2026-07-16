@@ -1,5 +1,5 @@
 const DEFAULT_URL = "http://voicevox:50021";
-const DEFAULT_SPEAKER = 3; // ずんだもん（ノーマル）
+const DEFAULT_SPEAKER = 14; // 冥鳴ひまり（ノーマル）
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export function resolveSpeaker(value: string | undefined): number {

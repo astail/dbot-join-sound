@@ -22,9 +22,9 @@ async function synthesizeWith(
   }
 }
 
-test("話者IDのデフォルトはずんだもん（3）", () => {
-  assert.equal(resolveSpeaker(undefined), 3);
-  assert.equal(resolveSpeaker(""), 3);
+test("話者IDのデフォルトは冥鳴ひまり（14）", () => {
+  assert.equal(resolveSpeaker(undefined), 14);
+  assert.equal(resolveSpeaker(""), 14);
   assert.equal(resolveSpeaker("0"), 0);
   assert.equal(resolveSpeaker("47"), 47);
 });
@@ -61,9 +61,9 @@ test("表示名から入室案内のWAVを合成する", async () => {
 
   assert.equal(wav?.toString(), "RIFF-fake-wav");
   // audio_query の結果をそのまま synthesis へ渡す 2 段構成
-  assert.match(urls[0], /\/audio_query\?text=.*&speaker=3$/);
+  assert.match(urls[0], /\/audio_query\?text=.*&speaker=14$/);
   assert.ok(urls[0].includes(encodeURIComponent("アステルさんが入室しました")));
-  assert.match(urls[1], /\/synthesis\?speaker=3$/);
+  assert.match(urls[1], /\/synthesis\?speaker=14$/);
   assert.deepEqual(bodies, ['{"accent_phrases":[]}']);
 });
 
