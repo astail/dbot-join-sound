@@ -20,15 +20,18 @@ const ffmpeg: string = ffmpegPath;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_SOUND_SECONDS = 8;
 
-const USAGE = `使い方:
+function createUsage(botName: string): string {
+  const bot = `@${botName}`;
+  return `使い方:
 \`\`\`
-@Bot 音声ファイル    自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭${MAX_SOUND_SECONDS}秒を使用）
-@Bot check            自分の入室音を確認
-@Bot delete           自分の入室音を削除
-@Bot off              自分の入室音・読み上げを無効化
-@Bot on               自分の入室音・読み上げを有効化
-@Bot                  自分がいる通話に参加
+${bot} + 音声ファイル  自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭${MAX_SOUND_SECONDS}秒を使用）
+${bot} check            自分の入室音を確認
+${bot} delete           自分の入室音を削除
+${bot} off              自分の入室音・読み上げを無効化
+${bot} on               自分の入室音・読み上げを有効化
+${bot}                  自分がいる通話に参加
 \`\`\``;
+}
 
 export async function handleMessage(message: Message): Promise<void> {
   if (message.author.bot || !message.inGuild()) return;
@@ -197,9 +200,10 @@ async function registerSound(
 }
 
 async function summonOrUsage(message: Message<true>): Promise<void> {
+  const usage = createUsage(message.client.user.username);
   const voiceChannel = message.member?.voice.channel;
   if (!voiceChannel) {
-    await message.reply(USAGE);
+    await message.reply(usage);
     return;
   }
 
@@ -207,7 +211,7 @@ async function summonOrUsage(message: Message<true>): Promise<void> {
   if (session) {
     // 参加済みの VC からのメンションは召喚が不要なので、無反応にせず使い方を返す
     await message.reply(
-      session.channelId === voiceChannel.id ? USAGE : "いまは別の通話に参加中です。",
+      session.channelId === voiceChannel.id ? usage : "いまは別の通話に参加中です。",
     );
     return;
   }

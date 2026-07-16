@@ -20,6 +20,7 @@ mock.module("../src/voice.ts", {
 const { handleMessage } = await import("../src/register.ts");
 
 const botId = "1234567890";
+const botName = "test-bot";
 
 function createMention(
   voiceChannelId: string | null,
@@ -29,7 +30,7 @@ function createMention(
     author: { bot: false, id: "9876543210" },
     inGuild: () => true,
     content: `<@${botId}>`,
-    client: { user: { id: botId } },
+    client: { user: { id: botId, username: botName } },
     attachments: { first: () => undefined },
     member: {
       voice: {
@@ -57,7 +58,8 @@ test("参加中の同じVCからのメンションには使い方を返信する
 
   assert.equal(replies.length, 1);
   assert.match(String(replies[0]), /^使い方:/);
-  assert.match(String(replies[0]), /@Bot 音声ファイル    自分の入室音を登録/);
+  assert.match(String(replies[0]), /@test-bot \+ 音声ファイル  自分の入室音を登録/);
+  assert.doesNotMatch(String(replies[0]), /@Bot/);
   assert.deepEqual(joinedChannelIds, []);
 });
 

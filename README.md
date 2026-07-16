@@ -80,7 +80,7 @@ Node.js 22.12 以上が必要。ffmpeg は `ffmpeg-static` 同梱のため別途
 ## 使い方
 
 ```text
-@Bot 音声ファイル    自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭8秒を使用）
+@Bot + 音声ファイル  自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭8秒を使用）
 @Bot check            自分の入室音を確認
 @Bot delete           自分の入室音を削除
 @Bot off              自分の入室音・読み上げを無効化
