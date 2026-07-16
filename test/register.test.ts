@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -41,8 +42,11 @@ async function readDurationSeconds(path: string): Promise<number> {
   return Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]);
 }
 
-// 指定秒数のサイン波を添付として登録させ、保存された入室音の実尺を返す
-async function registerTone(userId: string, seconds: number): Promise<number> {
+// 指定秒数のサイン波を添付として登録させ、Bot の返信と保存された入室音の実尺を返す
+async function registerTone(
+  userId: string,
+  seconds: number,
+): Promise<{ replies: unknown[]; duration: number }> {
   const tonePath = join(soundsDir, `tone-${userId}.wav`);
   await execFileAsync(ffmpeg, [
     "-y",
@@ -51,17 +55,26 @@ async function registerTone(userId: string, seconds: number): Promise<number> {
     tonePath,
   ]);
 
+  const replies: unknown[] = [];
   const originalFetch = globalThis.fetch;
-  const message = createMessage(`<@${botId}>`, userId, async () => {}, {
-    name: "tone.wav",
-    contentType: "audio/wav",
-    size: 1024,
-    url: "https://example.invalid/tone.wav",
-  });
+  const message = createMessage(
+    `<@${botId}>`,
+    userId,
+    async (payload) => replies.push(payload),
+    {
+      name: "tone.wav",
+      contentType: "audio/wav",
+      size: 1024,
+      url: "https://example.invalid/tone.wav",
+    },
+  );
   globalThis.fetch = async () => new Response(await readFile(tonePath));
   try {
     await handleMessage(message);
-    return await readDurationSeconds(soundPath(userId));
+    if (!existsSync(soundPath(userId))) {
+      throw new Error(`registration failed: ${replies.join(" / ")}`);
+    }
+    return { replies, duration: await readDurationSeconds(soundPath(userId)) };
   } finally {
     globalThis.fetch = originalFetch;
     await unlink(tonePath).catch(() => {});
@@ -126,42 +139,19 @@ test("登録音の添付送信に失敗したらテキストで通知する", as
 });
 
 test("8秒以下の音声は末尾まで登録される", async () => {
-  const duration = await registerTone("9876543212", 3);
+  const { duration } = await registerTone("9876543212", 3);
 
   assert.ok(Math.abs(duration - 3) < 0.5, `expected about 3s, got ${duration}s`);
 });
 
 test("8秒を超える音声は冒頭8秒で切り詰められる", async () => {
-  const duration = await registerTone("9876543213", 12);
+  const { duration } = await registerTone("9876543213", 12);
 
   assert.ok(Math.abs(duration - 8) < 0.5, `expected about 8s, got ${duration}s`);
 });
 
 test("登録完了メッセージが最大8秒を示す", async () => {
-  const replies: unknown[] = [];
-  const message = createMessage(
-    `<@${botId}>`,
-    "9876543214",
-    async (payload) => replies.push(payload),
-    { name: "tone.wav", contentType: "audio/wav", size: 1024, url: "https://example.invalid/tone.wav" },
-  );
-  const tonePath = join(soundsDir, "tone-9876543214.wav");
-  const originalFetch = globalThis.fetch;
-
-  await execFileAsync(ffmpeg, [
-    "-y",
-    "-f", "lavfi",
-    "-i", "sine=frequency=440:duration=1",
-    tonePath,
-  ]);
-  globalThis.fetch = async () => new Response(await readFile(tonePath));
-  try {
-    await handleMessage(message);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await unlink(tonePath).catch(() => {});
-    await unlink(soundPath("9876543214")).catch(() => {});
-  }
+  const { replies } = await registerTone("9876543214", 1);
 
   assert.deepEqual(replies, ["入室音を登録しました（冒頭8秒まで）。"]);
 });
