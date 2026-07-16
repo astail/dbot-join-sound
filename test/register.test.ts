@@ -158,7 +158,7 @@ test("checkを含む召喚依頼を登録音確認として扱わない", async 
   await handleMessage(message);
 
   assert.equal(replies.length, 1);
-  assert.match(String(replies[0]), /ボイスチャンネルに入った状態/);
+  assert.match(String(replies[0]), /^使い方:/);
 });
 
 test("登録音の添付送信に失敗したらテキストで通知する", async () => {
