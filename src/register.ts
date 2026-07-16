@@ -22,7 +22,7 @@ const MAX_SOUND_SECONDS = 8;
 
 const USAGE =
   `音声ファイルを添付してメンションすると、あなたの入室音として登録します（冒頭${MAX_SOUND_SECONDS}秒まで）。` +
-  "「確認」を付けてメンションすると登録済みの入室音を返します。" +
+  "「check」を付けてメンションすると登録済みの入室音を返します。" +
   "ボイスチャンネルに入った状態でメンションすると、その通話に参加します。";
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -35,7 +35,7 @@ export async function handleMessage(message: Message): Promise<void> {
   const attachment = message.attachments.first();
   if (attachment) {
     await registerSound(message, attachment);
-  } else if (text === "確認") {
+  } else if (text.toLowerCase() === "check") {
     await showSound(message);
   } else {
     await summonOrUsage(message);

@@ -91,10 +91,10 @@ async function registerTone(
   }
 }
 
-test("確認だけを指定したメンションで登録音を確認する", async () => {
+test("checkだけを指定したメンションで登録音を確認する", async () => {
   const replies: unknown[] = [];
   const message = createMessage(
-    `<@${botId}> 確認`,
+    `<@${botId}> check`,
     "9876543210",
     async (payload) => replies.push(payload),
   );
@@ -106,10 +106,25 @@ test("確認だけを指定したメンションで登録音を確認する", as
   ]);
 });
 
-test("確認を含む召喚依頼を登録音確認として扱わない", async () => {
+test("大文字を含むcheckでも登録音を確認する", async () => {
   const replies: unknown[] = [];
   const message = createMessage(
-    `<@${botId}> 動作確認できて`,
+    `<@${botId}> Check`,
+    "9876543210",
+    async (payload) => replies.push(payload),
+  );
+
+  await handleMessage(message);
+
+  assert.deepEqual(replies, [
+    "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。",
+  ]);
+});
+
+test("checkを含む召喚依頼を登録音確認として扱わない", async () => {
+  const replies: unknown[] = [];
+  const message = createMessage(
+    `<@${botId}> check して`,
     "9876543210",
     async (payload) => replies.push(payload),
   );
@@ -125,7 +140,7 @@ test("登録音の添付送信に失敗したらテキストで通知する", as
   const path = soundPath(userId);
   const replies: unknown[] = [];
   const message = createMessage(
-    `<@!${botId}> 確認`,
+    `<@!${botId}> check`,
     userId,
     async (payload) => {
       replies.push(payload);
