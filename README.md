@@ -25,7 +25,24 @@ https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot&permissio
 
 （権限: View Channels / Send Messages / Read Message History / Connect / Speak）
 
-### 2. 起動
+### 2. Docker Compose で起動
+
+```bash
+cp .env.example .env
+# .env の DISCORD_TOKEN を設定
+docker compose up -d --build
+```
+
+ログの確認と停止は、次のコマンドで行います。
+
+```bash
+docker compose logs -f bot
+docker compose down
+```
+
+登録した音声は Docker の `sounds` ボリュームに保存され、コンテナを作り直しても保持されます。`docker compose down -v` を実行すると登録音声も削除されるため注意してください。
+
+### 3. ローカルで起動
 
 ```bash
 cp .env.example .env   # DISCORD_TOKEN を記入
