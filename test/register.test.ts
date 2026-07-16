@@ -27,7 +27,7 @@ function createMessage(
     author: { bot: false, id: userId },
     inGuild: () => true,
     content,
-    client: { user: { id: botId } },
+    client: { user: { id: botId, username: "test-bot" } },
     attachments: { first: () => attachment },
     member: { voice: { channel: null } },
     guildId: "test-guild",
