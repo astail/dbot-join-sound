@@ -65,6 +65,13 @@ export function getSession(guildId: string): Session | undefined {
   return sessions.get(guildId);
 }
 
+export function leaveChannel(guildId: string): boolean {
+  const session = sessions.get(guildId);
+  if (!session) return false;
+  destroySession(guildId, session);
+  return true;
+}
+
 export async function joinChannel(
   channel: VoiceBasedChannel,
   initialJoiner?: { id: string; displayName: string | undefined },
