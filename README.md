@@ -28,8 +28,6 @@ https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot&permissio
 
 （権限: View Channels / Send Messages / Add Reactions / Read Message History / Connect / Speak）
 
-Add Reactions は登録完了を ✅ で示すために必要です。この権限を追加する前に招待した Bot は、登録は成功してもリアクションが付かないため、上記 URL で招待し直してください。
-
 ### 2. Docker Compose で起動
 
 ```bash
