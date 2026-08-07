@@ -448,7 +448,7 @@ test("offで鳴らさない設定になり、登録音は保持される", async
     marked = existsSync(offPath(userId));
     soundKept = existsSync(soundPath(userId));
     assert.deepEqual(replies, [
-      "入室音と読み上げを鳴らさないようにしました。登録した音声は保持されます。",
+      "入室音と入退室の読み上げを鳴らさないようにしました。登録した音声は保持されます。",
     ]);
   } finally {
     await unlink(offPath(userId)).catch(() => {});
@@ -466,7 +466,7 @@ test("onで鳴らす設定に戻る", async () => {
     await sendCommand(userId, "off");
     const replies = await sendCommand(userId, "on");
     cleared = existsSync(offPath(userId));
-    assert.deepEqual(replies, ["入室音を鳴らすようにしました。"]);
+    assert.deepEqual(replies, ["入室音と入退室の読み上げを鳴らすようにしました。"]);
   } finally {
     await unlink(offPath(userId)).catch(() => {});
   }

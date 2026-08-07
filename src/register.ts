@@ -27,8 +27,8 @@ function createUsage(botName: string): string {
 ${bot} + 音声ファイル  自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭${MAX_SOUND_SECONDS}秒を使用）
 ${bot} check            自分の入室音を確認
 ${bot} delete           自分の入室音を削除
-${bot} off              自分の入室音・読み上げを無効化
-${bot} on               自分の入室音・読み上げを有効化
+${bot} off              自分の入室音と入退室の読み上げを無効化
+${bot} on               自分の入室音と入退室の読み上げを有効化
 ${bot} join             自分がいる通話に参加
 ${bot} leave            参加中の通話から退出
 \`\`\``;
@@ -117,7 +117,7 @@ async function turnOff(message: Message<true>): Promise<void> {
     return;
   }
   await writeFile(path, "");
-  await message.reply("入室音と読み上げを鳴らさないようにしました。登録した音声は保持されます。");
+  await message.reply("入室音と入退室の読み上げを鳴らさないようにしました。登録した音声は保持されます。");
 }
 
 async function turnOn(message: Message<true>): Promise<void> {
@@ -127,7 +127,7 @@ async function turnOn(message: Message<true>): Promise<void> {
     return;
   }
   await unlink(path);
-  await message.reply("入室音を鳴らすようにしました。");
+  await message.reply("入室音と入退室の読み上げを鳴らすようにしました。");
 }
 
 const AUDIO_EXTENSION = /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus|webm|mka)$/i;

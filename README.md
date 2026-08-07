@@ -84,8 +84,8 @@ Node.js 22.12 以上が必要。ffmpeg は `ffmpeg-static` 同梱のため別途
 @Bot + 音声ファイル  自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭8秒を使用）
 @Bot check            自分の入室音を確認
 @Bot delete           自分の入室音を削除
-@Bot off              自分の入室音・読み上げを無効化
-@Bot on               自分の入室音・読み上げを有効化
+@Bot off              自分の入室音と入退室の読み上げを無効化
+@Bot on               自分の入室音と入退室の読み上げを有効化
 @Bot join             自分がいる通話に参加
 @Bot leave            参加中の通話から退出
 ```
