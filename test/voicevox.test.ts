@@ -3,19 +3,21 @@ import test from "node:test";
 import {
   resolveSpeaker,
   resolveTimeoutMs,
-  synthesizeJoinNotice,
+  synthesizeNotice,
+  type NoticeKind,
 } from "../src/voicevox.ts";
 
 // VOICEVOX を呼ばずに合成させ、リクエスト先と返した WAV を確認する
 async function synthesizeWith(
   fetchStub: typeof globalThis.fetch,
+  kind: NoticeKind = "join",
 ): Promise<Buffer | null> {
   const originalFetch = globalThis.fetch;
   const originalConsoleError = console.error;
   globalThis.fetch = fetchStub;
   console.error = () => {};
   try {
-    return await synthesizeJoinNotice("アステル");
+    return await synthesizeNotice("アステル", kind);
   } finally {
     globalThis.fetch = originalFetch;
     console.error = originalConsoleError;
@@ -65,6 +67,20 @@ test("表示名から入室案内のWAVを合成する", async () => {
   assert.ok(urls[0].includes(encodeURIComponent("アステルさんが入室しました")));
   assert.match(urls[1], /\/synthesis\?speaker=14$/);
   assert.deepEqual(bodies, ['{"accent_phrases":[]}']);
+});
+
+test("表示名から退室案内のWAVを合成する", async () => {
+  const urls: string[] = [];
+
+  const wav = await synthesizeWith(async (input) => {
+    urls.push(String(input));
+    return String(input).includes("/audio_query")
+      ? new Response('{"accent_phrases":[]}')
+      : new Response(Buffer.from("RIFF-fake-wav"));
+  }, "leave");
+
+  assert.equal(wav?.toString(), "RIFF-fake-wav");
+  assert.ok(urls[0].includes(encodeURIComponent("アステルさんが退室しました")));
 });
 
 test("audio_queryが失敗したら合成しない", async () => {

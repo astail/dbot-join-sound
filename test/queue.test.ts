@@ -45,13 +45,13 @@ mock.module("@discordjs/voice", {
   },
 });
 
-// 外部サービス（VOICEVOX）はモックする
+// 外部サービス（VOICEVOX）はモックする。読み上げは "<kind>:<表示名>" で記録する
 const synthesized: string[] = [];
 let synthesis: () => Promise<Buffer | null> = async () => Buffer.from("wav");
 mock.module("../src/voicevox.ts", {
   namedExports: {
-    synthesizeJoinNotice: async (displayName: string) => {
-      synthesized.push(displayName);
+    synthesizeNotice: async (displayName: string, kind: string) => {
+      synthesized.push(`${kind}:${displayName}`);
       return synthesis();
     },
   },
@@ -105,10 +105,14 @@ function voiceState(
 }
 
 // VC から退出する（remaining=0 なら Bot も抜けてセッションが壊れる）
-async function leave(id: string): Promise<void> {
+async function leave(
+  id: string,
+  displayName: string | undefined = "アステル",
+  remaining = 0,
+): Promise<void> {
   await handleVoiceStateUpdate(
-    voiceState(id, "アステル", "vc-1", 0),
-    voiceState(id, "アステル", null),
+    voiceState(id, displayName, "vc-1", remaining),
+    voiceState(id, displayName, null),
   );
 }
 
@@ -150,7 +154,7 @@ test("登録音がないユーザーは表示名で読み上げられる", async
   await join("u-unregistered-1", "アステル");
 
   assert.deepEqual(played.map((r) => r.inputType), [StreamType.Arbitrary]);
-  assert.deepEqual(synthesized, ["アステル"]);
+  assert.deepEqual(synthesized, ["join:アステル"]);
 });
 
 test("表示名が取れないユーザーは何も再生しない", async () => {
@@ -206,7 +210,7 @@ test("複数人が連続入室してもキュー順に再生される", async ()
     played.map((r) => r.inputType),
     [StreamType.OggOpus, StreamType.Arbitrary, StreamType.OggOpus],
   );
-  assert.deepEqual(synthesized, ["二人目"]);
+  assert.deepEqual(synthesized, ["join:二人目"]);
 });
 
 test("VOICEVOXが落ちていても後続の登録音は再生される", async () => {
@@ -229,7 +233,7 @@ test("VOICEVOXが落ちていても後続の登録音は再生される", async 
   release?.();
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(synthesized, ["アステル"], "合成は試みる");
+  assert.deepEqual(synthesized, ["join:アステル"], "合成は試みる");
   assert.deepEqual(
     played.map((r) => r.inputType),
     [StreamType.OggOpus],
@@ -296,4 +300,56 @@ test("offは他の人の入室音に影響しない", async () => {
   await finishPlayback();
 
   assert.deepEqual(played.map((r) => r.inputType), [StreamType.OggOpus]);
+});
+
+test("退室すると登録音があっても読み上げられる", async () => {
+  const registered = await registerSound("u-leave-1");
+
+  await join(registered, "アステル");
+  await leave(registered, "アステル", 1);
+  await finishPlayback();
+
+  assert.deepEqual(
+    played.map((r) => r.inputType),
+    [StreamType.OggOpus, StreamType.Arbitrary],
+  );
+  assert.deepEqual(synthesized, ["leave:アステル"], "退室音は登録できない");
+});
+
+test("別のチャンネルへ移動した人も退室として読み上げられる", async () => {
+  const registered = await registerSound("u-leave-2");
+
+  await join(registered, "アステル");
+  await handleVoiceStateUpdate(
+    voiceState(registered, "アステル", "vc-1", 1),
+    voiceState(registered, "アステル", "vc-2", 1),
+  );
+  await finishPlayback();
+
+  assert.deepEqual(synthesized, ["leave:アステル"]);
+});
+
+test("最後の1人が退室したら読み上げない", async () => {
+  await join("u-leave-3", "アステル");
+  await finishPlayback();
+  synthesized.length = 0;
+
+  await leave("u-leave-3", "アステル");
+  await finishPlayback();
+
+  assert.deepEqual(synthesized, [], "Bot も抜けるので聞く人がいない");
+  assert.equal(played.length, 1, "入室の読み上げだけ");
+});
+
+test("offにした人は退室しても読み上げられない", async () => {
+  const muted = await turnOff("u-leave-4");
+  const other = await registerSound("u-leave-5");
+
+  await join(other, "ほか");
+  await join(muted, "アステル");
+  await leave(muted, "アステル", 1);
+  await finishPlayback();
+
+  assert.deepEqual(played.map((r) => r.inputType), [StreamType.OggOpus]);
+  assert.deepEqual(synthesized, []);
 });

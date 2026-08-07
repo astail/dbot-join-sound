@@ -14,7 +14,7 @@ import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js
 import { createReadStream, existsSync } from "node:fs";
 import { Readable } from "node:stream";
 import { offPath, soundPath } from "./sounds.js";
-import { synthesizeJoinNotice } from "./voicevox.js";
+import { synthesizeNotice, type NoticeKind } from "./voicevox.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.4;
 const DEFAULT_VOICEVOX_VOLUME = 0.8;
@@ -46,8 +46,8 @@ export function resolveVoicevoxVolume(value: string | undefined): number {
 const playbackVolume = resolvePlaybackVolume(process.env.PLAYBACK_VOLUME);
 const voicevoxVolume = resolveVoicevoxVolume(process.env.VOICEVOX_VOLUME);
 
-// 登録済みなら音声ファイル、未登録なら読み上げる表示名
-type QueueItem = { path: string } | { displayName: string };
+// 入室で登録済みなら音声ファイル、それ以外は読み上げる表示名と入退室の別
+type QueueItem = { path: string } | { displayName: string; kind: NoticeKind };
 
 type Session = {
   channelId: string;
@@ -124,7 +124,7 @@ export async function joinChannel(
   // 最初の入室者は Ready を待つ前にキューへ積む。待機中に後続の入室イベントが
   // enqueue しても到着順が保たれる（Ready までは AutoPaused で再生保留される）
   if (initialJoiner) {
-    enqueue(session, initialJoiner.id, initialJoiner.displayName);
+    enqueue(session, initialJoiner.id, initialJoiner.displayName, "join");
   }
 
   try {
@@ -156,17 +156,19 @@ function enqueue(
   session: Session,
   userId: string,
   displayName: string | undefined,
+  kind: NoticeKind,
 ): void {
   // off にした人は登録音も読み上げも鳴らさないため、分岐より前で弾く
   if (existsSync(offPath(userId))) return;
 
   const path = soundPath(userId);
-  if (existsSync(path)) {
+  // 退室は全員共通の読み上げ。登録できるのは入室音だけ
+  if (kind === "join" && existsSync(path)) {
     session.queue.push({ path });
   } else if (displayName) {
-    session.queue.push({ displayName });
+    session.queue.push({ displayName, kind });
   } else {
-    return; // 未登録で表示名も取れない
+    return; // 表示名が取れない
   }
 
   if (session.player.state.status === AudioPlayerStatus.Idle) {
@@ -185,12 +187,12 @@ async function playNext(session: Session): Promise<void> {
         return; // 続きは Idle イベントが呼び出す
       }
 
-      const wav = await synthesizeJoinNotice(item.displayName);
+      const wav = await synthesizeNotice(item.displayName, item.kind);
       // 合成を待つ間に全員退出していたら再生しない。購読者のいない player は
       // AutoPaused のままになり、変換中の ffmpeg が終了しなくなる
       if (session.destroyed) return;
       if (!wav) continue;
-      session.player.play(createJoinNoticeResource(wav));
+      session.player.play(createNoticeResource(wav));
       return;
     }
   } catch (err) {
@@ -217,7 +219,7 @@ export function createJoinSoundResource(
   return resource;
 }
 
-export function createJoinNoticeResource(
+export function createNoticeResource(
   wav: Buffer,
   volume = voicevoxVolume,
 ): AudioResource {
@@ -266,7 +268,12 @@ export async function handleVoiceStateUpdate(
   if (session && oldState.channelId === session.channelId) {
     const humans =
       oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
-    if (humans === 0) destroySession(guildId, session);
+    if (humans === 0) {
+      destroySession(guildId, session);
+      return;
+    }
+    // 残っている人に向けた退室の読み上げ
+    enqueue(session, oldState.id, oldState.member?.displayName, "leave");
     return;
   }
 
@@ -284,7 +291,7 @@ export async function handleVoiceStateUpdate(
       displayName: newState.member?.displayName,
     });
   } else if (newState.channelId === session.channelId) {
-    enqueue(session, newState.id, newState.member?.displayName);
+    enqueue(session, newState.id, newState.member?.displayName, "join");
   }
   // 接続中に別チャンネルへ入った人は無視
 }
