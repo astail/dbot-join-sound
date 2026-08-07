@@ -4,8 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { soundsDir } from "../src/sounds.ts";
 import {
-  createJoinNoticeResource,
   createJoinSoundResource,
+  createNoticeResource,
   resolvePlaybackVolume,
   resolveVoicevoxVolume,
 } from "../src/voice.ts";
@@ -50,7 +50,7 @@ test("オーディオリソースへ再生音量を設定する", async () => {
 });
 
 test("VOICEVOXのオーディオリソースへ専用音量を設定する", () => {
-  const resource = createJoinNoticeResource(Buffer.from("wav"), 0.4);
+  const resource = createNoticeResource(Buffer.from("wav"), 0.4);
   assert.equal(resource.volume?.volume, 0.4);
   resource.playStream.destroy();
 });

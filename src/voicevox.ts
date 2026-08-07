@@ -26,14 +26,17 @@ const baseUrl = (process.env.VOICEVOX_URL ?? DEFAULT_URL).replace(/\/$/, "");
 const speaker = resolveSpeaker(process.env.VOICEVOX_SPEAKER);
 const timeoutMs = resolveTimeoutMs(process.env.VOICEVOX_TIMEOUT_MS);
 
+export type NoticeKind = "join" | "leave";
+
 /**
- * 入室案内の音声（WAV）を合成する。VOICEVOX が落ちていても Bot を止めないため、
+ * 入退室案内の音声（WAV）を合成する。VOICEVOX が落ちていても Bot を止めないため、
  * 失敗はここで握り潰して null を返す。
  */
-export async function synthesizeJoinNotice(
+export async function synthesizeNotice(
   displayName: string,
+  kind: NoticeKind,
 ): Promise<Buffer | null> {
-  const text = `${displayName}さんが入室しました`;
+  const text = `${displayName}さんが${kind === "join" ? "入室" : "退室"}しました`;
   try {
     // 読みと抑揚を決める audio_query の結果を、そのまま synthesis へ渡す 2 段構成
     const query = await fetch(
