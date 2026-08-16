@@ -36,7 +36,7 @@ export async function synthesizeNotice(
   displayName: string,
   kind: NoticeKind,
 ): Promise<Buffer | null> {
-  const text = `${displayName}さんが${kind === "join" ? "入室" : "退室"}しました`;
+  const text = `${displayName}が${kind === "join" ? "入室" : "退室"}しました`;
   try {
     // 読みと抑揚を決める audio_query の結果を、そのまま synthesis へ渡す 2 段構成
     const query = await fetch(
