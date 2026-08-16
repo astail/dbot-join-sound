@@ -64,7 +64,7 @@ test("表示名から入室案内のWAVを合成する", async () => {
   assert.equal(wav?.toString(), "RIFF-fake-wav");
   // audio_query の結果をそのまま synthesis へ渡す 2 段構成
   assert.match(urls[0], /\/audio_query\?text=.*&speaker=14$/);
-  assert.ok(urls[0].includes(encodeURIComponent("アステルさんが入室しました")));
+  assert.ok(urls[0].includes(encodeURIComponent("アステルが入室しました")));
   assert.match(urls[1], /\/synthesis\?speaker=14$/);
   assert.deepEqual(bodies, ['{"accent_phrases":[]}']);
 });
@@ -80,7 +80,7 @@ test("表示名から退室案内のWAVを合成する", async () => {
   }, "leave");
 
   assert.equal(wav?.toString(), "RIFF-fake-wav");
-  assert.ok(urls[0].includes(encodeURIComponent("アステルさんが退室しました")));
+  assert.ok(urls[0].includes(encodeURIComponent("アステルが退室しました")));
 });
 
 test("audio_queryが失敗したら合成しない", async () => {
