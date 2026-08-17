@@ -22,6 +22,11 @@ COPY --from=build --chown=node:node /app/dist ./dist
 
 RUN mkdir sounds && chown node:node sounds
 
+# ビルドしたコードの出所を Bot のステータスに出すため。ハッシュが変わるたびに
+# 以降の層が無効化されるので、依存のインストールより後ろに置く
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 USER node
 
 CMD ["node", "dist/index.js"]

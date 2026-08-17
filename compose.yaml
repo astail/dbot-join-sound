@@ -2,6 +2,8 @@ services:
   bot:
     build:
       context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     init: true
     restart: unless-stopped
     depends_on:
