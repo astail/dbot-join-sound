@@ -6,7 +6,7 @@ import { rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { offPath, soundPath, soundsDir } from "./sounds.js";
+import { MAX_SOUND_SECONDS, offPath, soundPath, soundsDir } from "./sounds.js";
 import { getSession, joinChannel, leaveChannel } from "./voice.js";
 
 const execFileAsync = promisify(execFile);
@@ -18,7 +18,6 @@ if (!ffmpegPath) throw new Error("ffmpeg-static: ffmpeg binary not found");
 const ffmpeg: string = ffmpegPath;
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_SOUND_SECONDS = 8;
 
 function createUsage(botName: string): string {
   const bot = `@${botName}`;
