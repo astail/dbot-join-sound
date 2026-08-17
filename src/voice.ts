@@ -18,6 +18,10 @@ import { synthesizeNotice, type NoticeKind } from "./voicevox.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.4;
 const DEFAULT_VOICEVOX_VOLUME = 0.8;
+const DEFAULT_ANNOUNCE_DELAY_MS = 500;
+// 間の長さとして意味のある範囲は大きく超えているので、秒とミリ秒の取り違えのような
+// 明らかな設定ミスだけを弾くための上限
+const MAX_ANNOUNCE_DELAY_MS = 5000;
 const DEFAULT_FADE_IN_MS = 1000;
 // 入室音はトリム上限より長くならないので、これを超えるフェードは鳴り終わるまでに完了しない
 const MAX_FADE_IN_MS = MAX_SOUND_SECONDS * 1000;
@@ -47,6 +51,20 @@ export function resolveVoicevoxVolume(value: string | undefined): number {
   return resolveVolume(value, "VOICEVOX_VOLUME", DEFAULT_VOICEVOX_VOLUME);
 }
 
+export function resolveAnnounceDelayMs(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_ANNOUNCE_DELAY_MS;
+  }
+
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0 || ms > MAX_ANNOUNCE_DELAY_MS) {
+    throw new Error(
+      `ANNOUNCE_DELAY_MS は 0 以上 ${MAX_ANNOUNCE_DELAY_MS} 以下のミリ秒で指定してください`,
+    );
+  }
+  return ms;
+}
+
 export function resolveFadeInMs(value: string | undefined): number {
   if (value === undefined || value.trim() === "") {
     return DEFAULT_FADE_IN_MS;
@@ -64,6 +82,7 @@ export function resolveFadeInMs(value: string | undefined): number {
 const playbackVolume = resolvePlaybackVolume(process.env.PLAYBACK_VOLUME);
 const voicevoxVolume = resolveVoicevoxVolume(process.env.VOICEVOX_VOLUME);
 const defaultFadeInMs = resolveFadeInMs(process.env.JOIN_SOUND_FADE_IN_MS);
+const announceDelayMs = resolveAnnounceDelayMs(process.env.ANNOUNCE_DELAY_MS);
 
 // 入室で登録済みなら音声ファイル、それ以外は読み上げる表示名と入退室の別
 type QueueItem = { path: string } | { displayName: string; kind: NoticeKind };
@@ -201,13 +220,26 @@ async function playNext(session: Session): Promise<void> {
   session.playing = true;
   try {
     for (let item = session.queue.shift(); item; item = session.queue.shift()) {
+      // 入退室の直後にいきなり鳴らさず一拍置く。待ちと合成を並行させるので、合成が
+      // 待ちより短いうちは登録音と読み上げで間の長さが揃う（長引けば合成待ちになる）。
+      // 0 のときは await しない（1 tick でも遅れると再生順の判定が変わる）。
+      // node:timers/promises ではなくグローバルの setTimeout を使うのは、テストから
+      // タイマーを差し替えて実時間を待たずに検証できるようにするため
+      const pause =
+        announceDelayMs > 0
+          ? new Promise((resolve) => setTimeout(resolve, announceDelayMs))
+          : null;
+
       if ("path" in item) {
+        if (pause) await pause;
+        if (session.destroyed) return;
         session.player.play(createJoinSoundResource(item.path));
         return; // 続きは Idle イベントが呼び出す
       }
 
       const wav = await synthesizeNotice(item.displayName, item.kind);
-      // 合成を待つ間に全員退出していたら再生しない。購読者のいない player は
+      if (pause) await pause;
+      // 待つ間に全員退出していたら再生しない。購読者のいない player は
       // AutoPaused のままになり、変換中の ffmpeg が終了しなくなる
       if (session.destroyed) return;
       if (!wav) continue;

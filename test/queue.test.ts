@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { unlink, writeFile } from "node:fs/promises";
-import test, { after, beforeEach, mock } from "node:test";
+import test, { after, afterEach, beforeEach, mock } from "node:test";
 import { AudioPlayerStatus, StreamType } from "@discordjs/voice";
 import { ChannelType, type VoiceState } from "discord.js";
 import { offPath, soundPath } from "../src/sounds.ts";
@@ -57,7 +57,26 @@ mock.module("../src/voicevox.ts", {
   },
 });
 
+// 待ちはタイマーを進めて消化するので、本番と同じ長さのまま検証できる
+const ANNOUNCE_DELAY_MS = 500;
+process.env.ANNOUNCE_DELAY_MS = String(ANNOUNCE_DELAY_MS);
+// ここで見たいのは再生順で、フェードは関係ない。有効なままだと再生のたびに
+// 実タイマーが走り続ける
+process.env.JOIN_SOUND_FADE_IN_MS = "0";
+
 const { handleVoiceStateUpdate } = await import("../src/voice.ts");
+
+// 一拍置く待ちを消化して、再生が始まるところまで進める。setImmediate は差し替えて
+// いないので、待つ代わりにマイクロタスクを流し切る用途で使える
+const drain = () => new Promise((resolve) => setImmediate(resolve));
+
+async function settle(): Promise<void> {
+  // 合成の完了待ちなど、保留中の続きを先に動かす。そこで新しい待ちが張られることが
+  // あるため（合成に失敗して次の項目へ進む場合など）、tick はその後に回す
+  await drain();
+  mock.timers.tick(ANNOUNCE_DELAY_MS);
+  await drain();
+}
 
 let guildSeq = 0;
 let guildId = "";
@@ -114,6 +133,7 @@ async function leave(
     voiceState(id, displayName, "vc-1", remaining),
     voiceState(id, displayName, null),
   );
+  await settle();
 }
 
 // 誰かが VC に入る
@@ -122,16 +142,20 @@ async function join(id: string, displayName: string | undefined): Promise<void> 
     voiceState(id, displayName, null),
     voiceState(id, displayName, "vc-1"),
   );
+  await settle();
 }
 
 // 再生が終わって次の項目へ進む
 async function finishPlayback(): Promise<void> {
   player.state = { status: AudioPlayerStatus.Idle };
   idle?.();
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
 }
 
 beforeEach(() => {
+  // 実時間を待たずに一拍置く待ちを消化する。共有ランナーの負荷で揺れないよう、
+  // sleep ではなくタイマーを差し替える
+  mock.timers.enable({ apis: ["setTimeout"] });
   // セッションは guild ごとに持たれるので、テストごとに別 guild を使って隔離する
   guildId = `guild-${++guildSeq}`;
   played.length = 0;
@@ -139,6 +163,10 @@ beforeEach(() => {
   player.state = { status: AudioPlayerStatus.Idle };
   idle = undefined;
   synthesis = async () => Buffer.from("wav");
+});
+
+afterEach(() => {
+  mock.timers.reset();
 });
 
 test("登録音があるユーザーは登録音が再生される", async () => {
@@ -183,7 +211,7 @@ test("合成を待つ間に入室した人の音を先に再生しない", async
   assert.deepEqual(played, [], "合成待ちを追い越して再生しない");
 
   release?.();
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   assert.deepEqual(played.map((r) => r.inputType), [StreamType.Arbitrary]);
 
   await finishPlayback();
@@ -231,7 +259,7 @@ test("VOICEVOXが落ちていても後続の登録音は再生される", async 
   assert.deepEqual(played, [], "合成の結果待ち");
 
   release?.();
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
 
   assert.deepEqual(synthesized, ["join:アステル"], "合成は試みる");
   assert.deepEqual(
@@ -254,9 +282,22 @@ test("合成待ちの最中に全員退出したら再生しない", async () =>
   await leave("u-unregistered-6");
 
   release?.();
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
 
   // 購読者のいない player で再生すると AutoPaused のまま ffmpeg が残ってしまう
+  assert.deepEqual(played, []);
+});
+
+test("一拍置いている間に全員退出したら登録音を再生しない", async () => {
+  const registered = await registerSound("u-delay-1");
+
+  // join ヘルパーは待ちが明けるまで進めてしまうので、ここでは直接呼ぶ
+  await handleVoiceStateUpdate(
+    voiceState(registered, "アステル", null),
+    voiceState(registered, "アステル", "vc-1"),
+  );
+  await leave(registered, "アステル");
+
   assert.deepEqual(played, []);
 });
 

@@ -7,6 +7,7 @@ import { soundsDir } from "../src/sounds.ts";
 import {
   createJoinSoundResource,
   createNoticeResource,
+  resolveAnnounceDelayMs,
   resolveFadeInMs,
   resolvePlaybackVolume,
   resolveVoicevoxVolume,
@@ -79,6 +80,23 @@ test("オーディオリソースへ再生音量を設定する", async () => {
   } finally {
     await unlink(path).catch(() => {});
   }
+});
+
+test("入退室から鳴らすまでの待ちのデフォルトは0.5秒", () => {
+  assert.equal(resolveAnnounceDelayMs(undefined), 500);
+  assert.equal(resolveAnnounceDelayMs(""), 500);
+});
+
+test("待ち時間はミリ秒で変更できる", () => {
+  assert.equal(resolveAnnounceDelayMs("0"), 0);
+  assert.equal(resolveAnnounceDelayMs("1500"), 1500);
+  assert.equal(resolveAnnounceDelayMs("5000"), 5000);
+});
+
+test("範囲外または不正な待ち時間を拒否する", () => {
+  assert.throws(() => resolveAnnounceDelayMs("-1"), /0 以上 5000 以下/);
+  assert.throws(() => resolveAnnounceDelayMs("5001"), /0 以上 5000 以下/);
+  assert.throws(() => resolveAnnounceDelayMs("invalid"), /0 以上 5000 以下/);
 });
 
 test("フェードインのデフォルトは1秒", () => {
