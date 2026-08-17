@@ -13,11 +13,15 @@ import {
 import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import { createReadStream, existsSync } from "node:fs";
 import { Readable } from "node:stream";
-import { offPath, soundPath } from "./sounds.js";
+import { MAX_SOUND_SECONDS, offPath, soundPath } from "./sounds.js";
 import { synthesizeNotice, type NoticeKind } from "./voicevox.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.4;
 const DEFAULT_VOICEVOX_VOLUME = 0.8;
+const DEFAULT_FADE_IN_MS = 1000;
+// 入室音はトリム上限より長くならないので、これを超えるフェードは鳴り終わるまでに完了しない
+const MAX_FADE_IN_MS = MAX_SOUND_SECONDS * 1000;
+const FADE_STEP_MS = 50;
 
 function resolveVolume(
   value: string | undefined,
@@ -43,8 +47,23 @@ export function resolveVoicevoxVolume(value: string | undefined): number {
   return resolveVolume(value, "VOICEVOX_VOLUME", DEFAULT_VOICEVOX_VOLUME);
 }
 
+export function resolveFadeInMs(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_FADE_IN_MS;
+  }
+
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0 || ms > MAX_FADE_IN_MS) {
+    throw new Error(
+      `JOIN_SOUND_FADE_IN_MS は 0 以上 ${MAX_FADE_IN_MS} 以下のミリ秒で指定してください`,
+    );
+  }
+  return ms;
+}
+
 const playbackVolume = resolvePlaybackVolume(process.env.PLAYBACK_VOLUME);
 const voicevoxVolume = resolveVoicevoxVolume(process.env.VOICEVOX_VOLUME);
+const defaultFadeInMs = resolveFadeInMs(process.env.JOIN_SOUND_FADE_IN_MS);
 
 // 入室で登録済みなら音声ファイル、それ以外は読み上げる表示名と入退室の別
 type QueueItem = { path: string } | { displayName: string; kind: NoticeKind };
@@ -205,6 +224,7 @@ async function playNext(session: Session): Promise<void> {
 export function createJoinSoundResource(
   path: string,
   volume = playbackVolume,
+  fadeInMs = defaultFadeInMs,
 ): AudioResource {
   // Opus を一度 PCM に戻して音量を調整するため、opusscript が必要。
   // 入室音は最大8秒なので、変換コストより既存ファイルにも即時適用できることを優先する。
@@ -212,10 +232,29 @@ export function createJoinSoundResource(
     inputType: StreamType.OggOpus,
     inlineVolume: true,
   });
-  if (!resource.volume) {
+  const control = resource.volume;
+  if (!control) {
     throw new Error("音量調整用のオーディオリソースを作成できませんでした");
   }
-  resource.volume.setVolume(volume);
+
+  if (fadeInMs === 0) {
+    control.setVolume(volume);
+    return resource;
+  }
+
+  // 突然鳴り出して驚かせないよう、無音から目標音量まで上げていく。経過時間ではなく
+  // playbackDuration を見るのは、接続待ちで AutoPaused の間にフェードだけ進むのを防ぐため。
+  // playbackDuration は Discord へ送出した時点で進む一方、音量変換はストリームの
+  // バッファ分だけ先を処理しているので、実際に聞こえるフェードは指定より少し長くなる
+  control.setVolume(0);
+  const timer = setInterval(() => {
+    const progress = Math.min(resource.playbackDuration / fadeInMs, 1);
+    control.setVolume(volume * progress);
+    // フェード中に鳴り終わる短い音もあるので、ended でも止める
+    if (progress >= 1 || resource.ended) clearInterval(timer);
+  }, FADE_STEP_MS);
+  // 再生されないまま捨てられたリソースのタイマーがプロセスを起こし続けないようにする
+  timer.unref();
   return resource;
 }
 
