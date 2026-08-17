@@ -34,8 +34,12 @@ https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot&permissio
 ```bash
 cp .env.example .env
 # .env の DISCORD_TOKEN を設定
-docker compose up -d --build
+GIT_COMMIT=$(git describe --always --dirty) docker compose up -d --build
 ```
+
+`GIT_COMMIT` はビルド中のコミットハッシュを Bot のカスタムステータスに表示するためのものです。付けずに起動すると `unknown` と表示されるだけで、動作自体は変わりません。
+
+`rev-parse` ではなく `describe --always --dirty` を使うのは、未コミットの変更を含むイメージに `26b7835-dirty` のような印を付けるためです。ハッシュだけだと、手元で書きかけのコードをビルドしても、そのコミットの内容が動いているように見えてしまいます。
 
 ログの確認と停止は、次のコマンドで行います。
 
