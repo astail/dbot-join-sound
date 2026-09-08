@@ -45,7 +45,15 @@ mock.module("@discordjs/voice", {
   },
 });
 
-// 外部サービス（VOICEVOX）はモックする。読み上げは "<kind>:<表示名>" で記録する
+// 辞書は sounds/yomi.json ひとつを共有し、テストファイルの並行実行で奪い合うため
+// モックする。置き換えの中身は yomi.test.ts で確かめている
+mock.module("../src/yomi.ts", {
+  namedExports: {
+    applyYomi: (displayName: string) => displayName.replace("mame", "まめ"),
+  },
+});
+
+// 外部サービス（VOICEVOX）はモックする。読み上げは "<kind>:<読み上げる名前>" で記録する
 const synthesized: string[] = [];
 let synthesis: () => Promise<Buffer | null> = async () => Buffer.from("wav");
 mock.module("../src/voicevox.ts", {
@@ -393,4 +401,18 @@ test("offにした人は退室しても読み上げられない", async () => {
 
   assert.deepEqual(played.map((r) => r.inputType), [StreamType.OggOpus]);
   assert.deepEqual(synthesized, []);
+});
+
+test("表示名は登録された読みに置き換えて読み上げる", async () => {
+  await join("u-yomi-1", "mame");
+
+  assert.deepEqual(synthesized, ["join:まめ"]);
+});
+
+test("退室の読み上げにも読みを使う", async () => {
+  await join("u-yomi-2", "mame");
+  await leave("u-yomi-2", "mame", 1);
+  await finishPlayback();
+
+  assert.deepEqual(synthesized, ["join:まめ", "leave:まめ"]);
 });

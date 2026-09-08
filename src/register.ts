@@ -30,7 +30,8 @@ ${bot} off              自分の入室音と入退室の読み上げを無効�
 ${bot} on               自分の入室音と入退室の読み上げを有効化
 ${bot} join             自分がいる通話に参加
 ${bot} leave            参加中の通話から退出
-\`\`\``;
+\`\`\`
+読み上げの読み方は \`/yomi\` で設定できます。`;
 }
 
 export async function handleMessage(message: Message): Promise<void> {

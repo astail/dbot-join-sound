@@ -1,4 +1,11 @@
-import { ActivityType, Client, Events, GatewayIntentBits } from "discord.js";
+import {
+  ActivityType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  type Guild,
+} from "discord.js";
+import { commands, handleInteraction } from "./commands.js";
 import { handleMessage } from "./register.js";
 import { handleVoiceStateUpdate } from "./voice.js";
 
@@ -23,9 +30,21 @@ const client = new Client({
   },
 });
 
+// ギルドごとに登録すると即座に反映される（グローバル登録は反映まで最大1時間かかる）。
+// 失敗しても入室音の再生には関係ないので、Bot は止めずにログだけ残す
+function registerCommands(guild: Guild): void {
+  guild.commands.set(commands).catch((err) => {
+    console.error(`failed to register commands for guild ${guild.id}:`, err);
+  });
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`Logged in as ${c.user.tag} (commit: ${commit})`);
+  c.guilds.cache.each(registerCommands);
 });
+
+// 起動後に招待されたサーバーにも登録する
+client.on(Events.GuildCreate, registerCommands);
 
 // リスナーがないと error イベントでプロセスが落ちる
 client.on(Events.Error, (err) => {
@@ -35,6 +54,12 @@ client.on(Events.Error, (err) => {
 client.on(Events.MessageCreate, (message) => {
   handleMessage(message).catch((err) =>
     console.error("messageCreate handler failed:", err),
+  );
+});
+
+client.on(Events.InteractionCreate, (interaction) => {
+  handleInteraction(interaction).catch((err) =>
+    console.error("interactionCreate handler failed:", err),
   );
 });
 

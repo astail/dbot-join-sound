@@ -15,6 +15,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { Readable } from "node:stream";
 import { MAX_SOUND_SECONDS, offPath, soundPath } from "./sounds.js";
 import { synthesizeNotice, type NoticeKind } from "./voicevox.js";
+import { applyYomi } from "./yomi.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.4;
 const DEFAULT_VOICEVOX_VOLUME = 0.8;
@@ -84,8 +85,8 @@ const voicevoxVolume = resolveVoicevoxVolume(process.env.VOICEVOX_VOLUME);
 const defaultFadeInMs = resolveFadeInMs(process.env.JOIN_SOUND_FADE_IN_MS);
 const announceDelayMs = resolveAnnounceDelayMs(process.env.ANNOUNCE_DELAY_MS);
 
-// 入室で登録済みなら音声ファイル、それ以外は読み上げる表示名と入退室の別
-type QueueItem = { path: string } | { displayName: string; kind: NoticeKind };
+// 入室で登録済みなら音声ファイル、それ以外は読み上げる名前と入退室の別
+type QueueItem = { path: string } | { name: string; kind: NoticeKind };
 
 type Session = {
   channelId: string;
@@ -204,7 +205,8 @@ function enqueue(
   if (kind === "join" && existsSync(path)) {
     session.queue.push({ path });
   } else if (displayName) {
-    session.queue.push({ displayName, kind });
+    // 表示名のまま読ませると読み違えられる部分を、登録済みの読みに置き換える
+    session.queue.push({ name: applyYomi(displayName), kind });
   } else {
     return; // 表示名が取れない
   }
@@ -237,7 +239,7 @@ async function playNext(session: Session): Promise<void> {
         return; // 続きは Idle イベントが呼び出す
       }
 
-      const wav = await synthesizeNotice(item.displayName, item.kind);
+      const wav = await synthesizeNotice(item.name, item.kind);
       if (pause) await pause;
       // 待つ間に全員退出していたら再生しない。購読者のいない player は
       // AutoPaused のままになり、変換中の ffmpeg が終了しなくなる
