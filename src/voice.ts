@@ -13,7 +13,12 @@ import {
 import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import { createReadStream, existsSync } from "node:fs";
 import { Readable } from "node:stream";
-import { MAX_SOUND_SECONDS, offPath, soundPath } from "./sounds.js";
+import {
+  MAX_SOUND_SECONDS,
+  joinSoundEnabled,
+  offPath,
+  soundPath,
+} from "./sounds.js";
 import { synthesizeNotice, type NoticeKind } from "./voicevox.js";
 import { applyYomi } from "./yomi.js";
 
@@ -201,8 +206,9 @@ function enqueue(
   if (existsSync(offPath(userId))) return;
 
   const path = soundPath(userId);
-  // 退室は全員共通の読み上げ。登録できるのは入室音だけ
-  if (kind === "join" && existsSync(path)) {
+  // 退室は全員共通の読み上げ。登録できるのは入室音だけ。
+  // 登録を受け付けないモードでは、登録済みの人も読み上げに回す
+  if (kind === "join" && joinSoundEnabled && existsSync(path)) {
     session.queue.push({ path });
   } else if (displayName) {
     // 表示名のまま読ませると読み違えられる部分を、登録済みの読みに置き換える

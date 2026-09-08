@@ -6,7 +6,13 @@ import { rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { MAX_SOUND_SECONDS, offPath, soundPath, soundsDir } from "./sounds.js";
+import {
+  MAX_SOUND_SECONDS,
+  joinSoundEnabled,
+  offPath,
+  soundPath,
+  soundsDir,
+} from "./sounds.js";
 import { getSession, joinChannel, leaveChannel } from "./voice.js";
 
 const execFileAsync = promisify(execFile);
@@ -19,19 +25,30 @@ const ffmpeg: string = ffmpegPath;
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+// 登録を受け付けないモードの案内。登録を促す文言の代わりに使う
+const DISABLED_NOTICE =
+  "いまは入室音を登録・再生しない設定で動いています（入退室は読み上げのみ）。登録済みの音声は保持され、設定を戻せばまた鳴ります。";
+
+// 未登録のときの案内。登録できないモードではできない操作を案内しない
+const NOT_REGISTERED = joinSoundEnabled
+  ? "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。"
+  : `入室音は未登録です。${DISABLED_NOTICE}`;
+
 function createUsage(botName: string): string {
   const bot = `@${botName}`;
+  const register = joinSoundEnabled
+    ? `${bot} + 音声ファイル  自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭${MAX_SOUND_SECONDS}秒を使用）\n`
+    : "";
   return `使い方:
 \`\`\`
-${bot} + 音声ファイル  自分の入室音を登録（mp3 / wav / ogg など。長い音声は冒頭${MAX_SOUND_SECONDS}秒を使用）
-${bot} check            自分の入室音を確認
+${register}${bot} check            自分の入室音を確認
 ${bot} delete           自分の入室音を削除
 ${bot} off              自分の入室音と入退室の読み上げを無効化
 ${bot} on               自分の入室音と入退室の読み上げを有効化
 ${bot} join             自分がいる通話に参加
 ${bot} leave            参加中の通話から退出
 \`\`\`
-読み上げの読み方は \`/yomi\` で設定できます。`;
+読み上げの読み方は \`/yomi\` で設定できます。${joinSoundEnabled ? "" : `\n${DISABLED_NOTICE}`}`;
 }
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -68,15 +85,19 @@ async function showSound(message: Message<true>): Promise<void> {
     await message.reply(
       isOff
         ? "入室音は未登録で、鳴らさない設定です。「on」を付けてメンションすると読み上げが戻ります。"
-        : "入室音は未登録です。音声ファイルを添付してメンションすると登録できます。",
+        : NOT_REGISTERED,
     );
     return;
   }
+
+  const registered = joinSoundEnabled
+    ? "登録されている入室音です。"
+    : `登録されている入室音です。${DISABLED_NOTICE}`;
   try {
     await message.reply({
       content: isOff
         ? "鳴らさない設定です。保持されている入室音はこちらです。「on」を付けてメンションすると鳴るようになります。"
-        : "登録されている入室音です。",
+        : registered,
       files: [{ attachment: path, name: "join-sound.ogg" }],
     });
   } catch (err) {
@@ -88,7 +109,7 @@ async function showSound(message: Message<true>): Promise<void> {
 async function deleteSound(message: Message<true>): Promise<void> {
   const path = soundPath(message.author.id);
   if (!existsSync(path)) {
-    await message.reply("入室音は未登録です。音声ファイルを添付してメンションすると登録できます。");
+    await message.reply(NOT_REGISTERED);
     return;
   }
 
@@ -136,6 +157,11 @@ async function registerSound(
   message: Message<true>,
   attachment: Attachment,
 ): Promise<void> {
+  if (!joinSoundEnabled) {
+    await message.reply(DISABLED_NOTICE);
+    return;
+  }
+
   // contentType を付けないクライアントがあるため拡張子でもフォールバック判定する
   const isAudio =
     attachment.contentType?.startsWith("audio/") ||
