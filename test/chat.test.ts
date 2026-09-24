@@ -35,7 +35,9 @@ const {
   readChannels,
   readChatMessage,
   resolveVcChatDeleteSeconds,
+  resolveVcChatReadEnabled,
   scheduleVcChatDeletion,
+  toAttachmentNotice,
   toSpeechText,
   writeChannels,
 } = await import("../src/chat.ts");
@@ -56,17 +58,19 @@ afterEach(async () => {
   await unlink(channelsPath).catch(() => {});
 });
 
+type TestAttachment = { contentType: string | null; name: string };
+
 function chatMessage(
   channelId: string,
   content: string,
-  { bot = false, voice = false } = {},
+  { bot = false, attachments = [] as TestAttachment[] } = {},
 ): Message {
   return {
     author: { bot },
     inGuild: () => true,
     guildId: "test-guild",
     channelId,
-    channel: { isVoiceBased: () => voice },
+    attachments: new Map(attachments.map((a, i) => [String(i), a])),
     content,
     cleanContent: content,
     client: { user: { id: botId } },
@@ -118,6 +122,47 @@ test("長文は途中で打ち切る", () => {
   assert.equal(text, `${"あ".repeat(MAX_SPEECH_LENGTH)} 以下略`);
 });
 
+test("画像や動画の添付を知らせる", () => {
+  const image = { contentType: "image/png", name: "a.png" };
+  const video = { contentType: "video/mp4", name: "b.mp4" };
+
+  assert.equal(toAttachmentNotice([image, image]), "画像がアップロードされました");
+  assert.equal(toAttachmentNotice([video]), "動画がアップロードされました");
+  assert.equal(toAttachmentNotice([image, video]), "画像と動画がアップロードされました");
+});
+
+test("contentTypeがなくても拡張子で画像や動画と判定する", () => {
+  assert.equal(
+    toAttachmentNotice([{ contentType: null, name: "photo.JPG" }]),
+    "画像がアップロードされました",
+  );
+  assert.equal(
+    toAttachmentNotice([{ contentType: null, name: "clip.mov" }]),
+    "動画がアップロードされました",
+  );
+});
+
+test("画像や動画以外の添付は知らせない", () => {
+  assert.equal(toAttachmentNotice([{ contentType: "application/pdf", name: "a.pdf" }]), "");
+  assert.equal(toAttachmentNotice([]), "");
+});
+
+test("画像だけの発言は添付を読み上げる", () => {
+  const attachments = [{ contentType: "image/png", name: "a.png" }];
+
+  readChatMessage(chatMessage("vc-1", "", { attachments }));
+
+  assert.deepEqual(enqueued, ["画像がアップロードされました"]);
+});
+
+test("本文と画像がある発言は本文に続けて添付を読み上げる", () => {
+  const attachments = [{ contentType: "video/mp4", name: "a.mp4" }];
+
+  readChatMessage(chatMessage("vc-1", "見て", { attachments }));
+
+  assert.deepEqual(enqueued, ["見て、動画がアップロードされました"]);
+});
+
 test("Botが参加中のVC付属チャットを読み上げる", () => {
   readChatMessage(chatMessage("vc-1", "こんにちは"));
 
@@ -162,8 +207,26 @@ test("Botの発言とBotへのコマンドは読まない", () => {
   assert.deepEqual(enqueued, []);
 });
 
-test("添付だけの発言は読まない", () => {
-  readChatMessage(chatMessage("vc-1", ""));
+test("VC付属チャットの読み上げを止めても指定チャンネルは読む", async () => {
+  await writeChannels(["text-1"]);
+
+  readChatMessage(chatMessage("vc-1", "VC付属チャット"), false);
+  readChatMessage(chatMessage("text-1", "指定チャンネル"), false);
+
+  assert.deepEqual(enqueued, ["指定チャンネル"]);
+});
+
+test("VC付属チャットの読み上げの有効・無効を切り替えられる", () => {
+  assert.equal(resolveVcChatReadEnabled(undefined), true);
+  assert.equal(resolveVcChatReadEnabled(""), true);
+  assert.equal(resolveVcChatReadEnabled("FALSE"), false);
+  assert.throws(() => resolveVcChatReadEnabled("no"), /true または false/);
+});
+
+test("画像や動画以外の添付だけの発言は読まない", () => {
+  const attachments = [{ contentType: "application/pdf", name: "a.pdf" }];
+
+  readChatMessage(chatMessage("vc-1", "", { attachments }));
 
   assert.deepEqual(enqueued, []);
 });
@@ -241,8 +304,8 @@ test.describe("VC付属チャットの自動削除", () => {
     mock.timers.reset();
   });
 
-  function deletable(voice: boolean, error?: unknown, bot = false) {
-    const message = chatMessage("vc-1", "こんにちは", { voice, bot });
+  function deletable(channelId: string, { bot = false, error = undefined as unknown } = {}) {
+    const message = chatMessage(channelId, "こんにちは", { bot });
     let deleted = 0;
     Object.assign(message, {
       delete: async () => {
@@ -253,8 +316,8 @@ test.describe("VC付属チャットの自動削除", () => {
     return { message, deleted: () => deleted };
   }
 
-  test("指定した秒数が経ったら消す", () => {
-    const { message, deleted } = deletable(true);
+  test("Botが参加中のVC付属チャットは指定した秒数が経ったら消す", () => {
+    const { message, deleted } = deletable("vc-1");
 
     scheduleVcChatDeletion(message, 30);
     mock.timers.tick(29_999);
@@ -263,17 +326,8 @@ test.describe("VC付属チャットの自動削除", () => {
     assert.equal(deleted(), 1);
   });
 
-  test("VC付属チャット以外は消さない", () => {
-    const { message, deleted } = deletable(false);
-
-    scheduleVcChatDeletion(message, 30);
-    mock.timers.tick(30_000);
-
-    assert.equal(deleted(), 0);
-  });
-
-  test("VC付属チャットならBotの発言も消す", () => {
-    const { message, deleted } = deletable(true, undefined, true);
+  test("Botの発言も消す", () => {
+    const { message, deleted } = deletable("vc-1", { bot: true });
 
     scheduleVcChatDeletion(message, 30);
     mock.timers.tick(30_000);
@@ -281,8 +335,19 @@ test.describe("VC付属チャットの自動削除", () => {
     assert.equal(deleted(), 1);
   });
 
-  test("VC付属チャット以外ではBotの発言も消さない", () => {
-    const { message, deleted } = deletable(false, undefined, true);
+  test("投稿のあとBotが抜けても予定どおり消す", () => {
+    const { message, deleted } = deletable("vc-1");
+
+    scheduleVcChatDeletion(message, 30);
+    mock.timers.tick(10_000);
+    session = undefined;
+    mock.timers.tick(20_000);
+
+    assert.equal(deleted(), 1);
+  });
+
+  test("Botが参加していないVCの付属チャットは消さない", () => {
+    const { message, deleted } = deletable("vc-2");
 
     scheduleVcChatDeletion(message, 30);
     mock.timers.tick(30_000);
@@ -290,8 +355,31 @@ test.describe("VC付属チャットの自動削除", () => {
     assert.equal(deleted(), 0);
   });
 
+  test("Botが通話にいなければ消さない", () => {
+    session = undefined;
+    const { message, deleted } = deletable("vc-1");
+
+    scheduleVcChatDeletion(message, 30);
+    mock.timers.tick(30_000);
+
+    assert.equal(deleted(), 0);
+  });
+
+  test("指定チャンネルの発言はBotのものも含めて消さない", async () => {
+    await writeChannels(["text-1"]);
+    const human = deletable("text-1");
+    const bot = deletable("text-1", { bot: true });
+
+    scheduleVcChatDeletion(human.message, 30);
+    scheduleVcChatDeletion(bot.message, 30);
+    mock.timers.tick(30_000);
+
+    assert.equal(human.deleted(), 0);
+    assert.equal(bot.deleted(), 0);
+  });
+
   test("0秒なら消さない", () => {
-    const { message, deleted } = deletable(true);
+    const { message, deleted } = deletable("vc-1");
 
     scheduleVcChatDeletion(message, 0);
     mock.timers.tick(30_000);
@@ -303,7 +391,9 @@ test.describe("VC付属チャットの自動削除", () => {
     const errors: unknown[] = [];
     const originalConsoleError = console.error;
     console.error = (...args: unknown[]) => errors.push(args);
-    const { message } = deletable(true, { code: RESTJSONErrorCodes.UnknownMessage });
+    const { message } = deletable("vc-1", {
+      error: { code: RESTJSONErrorCodes.UnknownMessage },
+    });
 
     try {
       scheduleVcChatDeletion(message, 30);
