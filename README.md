@@ -10,6 +10,8 @@
 - **再生の無効化**: 「off」を付けて @メンションすると、自分の入室音も読み上げも鳴らなくなる（登録した音声は保持され、「on」で戻る）。Discord のサウンドボード等で既に入室音がある人向け
 - **未登録ユーザーの読み上げ**: 入室音がない人は、表示名で「〇〇が入室しました」と読み上げ（VOICEVOX）
 - **退室の読み上げ**: 誰かが VC から抜けると「〇〇が退室しました」と読み上げ。全員共通で、退室音は登録できない
+- **チャットの読み上げ**: Bot が参加中の VC に付いているテキストチャットの発言を、本文だけ VOICEVOX で読み上げる。`/readchannel add` を実行したチャンネルの発言も読み上げる（Bot が通話にいる間だけ）
+- **VC 付属チャットの自動削除**: VC に付いているテキストチャットの発言は、Bot の返信も含めて 30 秒後に削除（`VC_CHAT_DELETE_SECONDS` で変更、`0` で無効）
 - **読み方の登録**: `/yomi set` で「読み間違えられる単語 → 実際の読み方」を登録。表示名に部分一致した箇所を置き換えて読み上げる（`mame` → `まめ` を登録すれば `mamesan` も「まめさん」寄りに読まれる）
 - **登録なしモード**: `JOIN_SOUND_ENABLED=false` で起動すると入室音の登録を受け付けず、登録済みの音声も鳴らさない（読み上げのみ）。音声は消えないので、`true` に戻せばまた鳴る
 - **自動参加**: 未接続時に誰かが VC に入ると、その VC に自動参加して本人の入室音も再生
@@ -22,16 +24,18 @@
 ### 1. Discord Developer Portal
 
 1. <https://discord.com/developers/applications> でアプリケーションを作成
-2. **Bot** タブでトークンを取得（**Privileged Gateway Intents は不要**。MESSAGE CONTENT INTENT も有効化不要 — Bot への直接メンションは制限免除のため）
+2. **Bot** タブでトークンを取得し、**Privileged Gateway Intents の MESSAGE CONTENT INTENT を有効化**（チャットの読み上げに本文が必要なため。有効化しないと起動時に `Used disallowed intents` で接続できない）
 3. 以下の URL でサーバーに招待（`CLIENT_ID` は置き換え）:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot%20applications.commands&permissions=3214400
+https://discord.com/api/oauth2/authorize?client_id=CLIENT_ID&scope=bot%20applications.commands&permissions=3222592
 ```
 
-（権限: View Channels / Send Messages / Add Reactions / Read Message History / Connect / Speak）
+（権限: View Channels / Send Messages / Manage Messages / Add Reactions / Read Message History / Connect / Speak）
 
-`applications.commands` はスラッシュコマンド（`/yomi`）の登録に必要です。すでに `scope=bot` だけで招待済みのサーバーでも、この URL を踏み直せばスコープが追加されます。Bot は退出せず、登録済みの入室音も残ります。
+Manage Messages は VC 付属チャットの自動削除に使います。招待済みのサーバーでは、この URL を踏み直すか、サーバー設定で Bot のロールに「メッセージの管理」を付けてください。権限がなくても読み上げは動き、削除だけが失敗してログに残ります。
+
+`applications.commands` はスラッシュコマンド（`/yomi` と `/readchannel`）の登録に必要です。すでに `scope=bot` だけで招待済みのサーバーでも、この URL を踏み直せばスコープが追加されます。Bot は退出せず、登録済みの入室音も残ります。
 
 ### 2. Docker Compose で起動
 
@@ -73,6 +77,7 @@ docker compose down
 | `PLAYBACK_VOLUME` | `0.4` | 登録音の再生音量（`0.0`〜`1.0`） |
 | `VOICEVOX_VOLUME` | `0.8` | VOICEVOX 読み上げの再生音量（`0.0`〜`1.0`） |
 | `JOIN_SOUND_FADE_IN_MS` | `1000` | 登録音のフェードイン時間（`0`〜`8000` ミリ秒、`0` で無効） |
+| `VC_CHAT_DELETE_SECONDS` | `30` | VC 付属チャットの発言を消すまでの秒数（`0`〜`86400`、`0` で消さない） |
 | `ANNOUNCE_DELAY_MS` | `500` | 入退室から鳴らし始めるまでの待ち（`0`〜`5000` ミリ秒、`0` で即時） |
 | `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID |
 | `VOICEVOX_URL` | `http://voicevox:50021` | VOICEVOX Engine の接続先 |
@@ -119,6 +124,27 @@ Node.js 22.12 以上が必要。ffmpeg は `ffmpeg-static` 同梱のため別途
 
 最大8秒へ延長する前に登録した音声は5秒でトリムされたまま保存されています。8秒まで使いたい場合は登録し直してください。
 
+### チャットの読み上げ
+
+Bot が通話に参加している間、次のチャンネルの発言を本文だけ読み上げます。
+
+- Bot が参加中の VC に付いているテキストチャット（設定不要）
+- `/readchannel add` を実行したチャンネル
+
+```text
+/readchannel add     このチャンネルのチャットを読み上げる
+/readchannel remove  このチャンネルのチャットを読み上げない
+/readchannel list    読み上げるチャンネルの一覧（VC 付属チャットは含まない）
+```
+
+- 入退室の音と同じ順番待ちに並ぶので、重なって鳴ることはない
+- URL は「URL」、伏せ字（`||…||`）は「伏せ字」と読み、カスタム絵文字は読まない。100 文字を超える部分は「以下略」で打ち切る
+- `/yomi` で登録した読み方はチャットにも効く
+- Bot の発言と、Bot へのメンション（`@Bot check` などのコマンド）は読まない
+- 読み上げるチャンネルは `sounds/readchannels.json` に保存され、全サーバー共通の 1 ファイルで持つ
+
+VC 付属のテキストチャットは、どの VC のものでも発言から 30 秒で自動的に削除されます（Bot が参加していない VC も対象）。Bot 自身の返信も消えるため、VC 付属チャットで `@Bot delete` すると、控えとして添付される削除した音声も 30 秒で消えます。控えを残したいときは普通のテキストチャンネルで実行してください。削除の予約はメモリ上に持つので、30 秒以内に Bot を再起動した発言は消えずに残ります。
+
 ### 読み方（スラッシュコマンド）
 
 VOICEVOX が名前を読み違えるとき（`mame` を「めいむ」と読んでしまう等）に登録します。
@@ -133,7 +159,7 @@ VOICEVOX が名前を読み違えるとき（`mame` を「めいむ」と読ん�
 - 大文字小文字は区別しない（`Mame` でも `MAME` でも一致）。登録時は小文字にそろえて保存される
 - 同じ位置に複数当てはまるときは長い単語が優先される（`mame` と `mamesan` の両方があれば `mamesan` の読みを使う）
 - 辞書は Bot 全体で共通。誰でも登録・削除でき、ユーザーごとの設定ではない
-- 入室音を登録している人は入室では音が鳴るので、読み方が効くのは退室の読み上げだけ
+- 入室音を登録している人は入室では音が鳴るので、読み方が効くのは退室の読み上げとチャットの読み上げだけ
 
 読み方は `sounds/yomi.json` に保存され、入室音と同じボリュームで保持されます。
 

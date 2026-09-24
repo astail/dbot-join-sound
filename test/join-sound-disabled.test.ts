@@ -58,6 +58,7 @@ mock.module("../src/voicevox.ts", {
       synthesized.push(`${kind}:${name}`);
       return Buffer.from("wav");
     },
+    synthesize: async () => Buffer.from("wav"),
   },
 });
 
