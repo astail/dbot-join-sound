@@ -241,8 +241,8 @@ test.describe("VC付属チャットの自動削除", () => {
     mock.timers.reset();
   });
 
-  function deletable(voice: boolean, error?: unknown) {
-    const message = chatMessage("vc-1", "こんにちは", { voice });
+  function deletable(voice: boolean, error?: unknown, bot = false) {
+    const message = chatMessage("vc-1", "こんにちは", { voice, bot });
     let deleted = 0;
     Object.assign(message, {
       delete: async () => {
@@ -265,6 +265,15 @@ test.describe("VC付属チャットの自動削除", () => {
 
   test("VC付属チャット以外は消さない", () => {
     const { message, deleted } = deletable(false);
+
+    scheduleVcChatDeletion(message, 30);
+    mock.timers.tick(30_000);
+
+    assert.equal(deleted(), 0);
+  });
+
+  test("Botの発言は消さない", () => {
+    const { message, deleted } = deletable(true, undefined, true);
 
     scheduleVcChatDeletion(message, 30);
     mock.timers.tick(30_000);
