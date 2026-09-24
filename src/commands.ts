@@ -1,9 +1,11 @@
 import {
+  MessageFlags,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type Interaction,
 } from "discord.js";
 import { readChannels, writeChannels } from "./chat.js";
+import { getSession } from "./voice.js";
 import {
   MAX_READING_LENGTH,
   MAX_WORD_LENGTH,
@@ -73,6 +75,16 @@ export const commands = [
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   if (!interaction.isChatInputCommand()) return;
+
+  // Bot が通話にいないときはチャットに何も書き込まないので、コマンドも実行しない。
+  // 応答しないと Discord が本人にエラーを見せるため、本人にだけ見える一時メッセージで断る
+  if (!interaction.guildId || !getSession(interaction.guildId)) {
+    await interaction.reply({
+      content: "Bot が通話に参加していないときは使えません。",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
   const subcommand = interaction.options.getSubcommand();
   if (interaction.commandName === "shaberu-ch") {

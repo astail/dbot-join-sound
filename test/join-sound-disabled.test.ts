@@ -114,10 +114,15 @@ function createMessage(
     client: { user: { id: botId, username: "test-bot" } },
     attachments: { first: () => attachment },
     member: { voice: { channel: null } },
-    guildId: "test-guild",
+    guildId,
     reply,
     react: async () => {},
   } as unknown as Message;
+}
+
+// Bot は通話にいないとコマンドを受け付けないので、誰かを入室させて参加させておく
+async function summonBot(): Promise<void> {
+  await handleVoiceStateUpdate(voiceState("u-summoner", null), voiceState("u-summoner", "vc-1"));
 }
 
 test("設定がなければ登録できるモードで動く", () => {
@@ -135,6 +140,7 @@ test("true/false以外の指定は起動時に弾く", () => {
 
 test("登録できないモードでは音声を添付しても登録しない", async () => {
   const userId = "u-disabled-register";
+  await summonBot();
   const replies: unknown[] = [];
   const originalFetch = globalThis.fetch;
   // 受け付けない添付をダウンロードしていないことも確かめる
@@ -160,6 +166,7 @@ test("登録できないモードでは音声を添付しても登録しない",
 });
 
 test("登録できないモードの使い方には登録の案内を出さない", async () => {
+  await summonBot();
   const replies: unknown[] = [];
 
   await handleMessage(
@@ -195,6 +202,7 @@ test("登録できないモードでも登録済みの音声は確認・削除�
   await writeFile(path, "ogg");
   cleanupPaths.push(path);
 
+  await summonBot();
   const replies: unknown[] = [];
   const push = async (payload: unknown) => replies.push(payload);
   await handleMessage(createMessage(`<@${botId}> check`, userId, push));

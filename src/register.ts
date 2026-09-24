@@ -59,6 +59,15 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const command = message.content.replace(/<@!?\d+>/g, "").trim().toLowerCase();
   const attachment = message.attachments.first();
+
+  // Bot が通話にいないときはチャットに何も書き込まない。結果を返せないまま登録や
+  // 削除だけ起きると気づけないので、通話に呼ぶ join 以外はコマンドも実行しない
+  const session = getSession(message.guildId);
+  if (!session) {
+    if (!attachment && command === "join") await joinCurrentChannel(message);
+    return;
+  }
+
   if (attachment) {
     await registerSound(message, attachment);
   } else if (command === "check") {
@@ -70,7 +79,14 @@ export async function handleMessage(message: Message): Promise<void> {
   } else if (command === "on") {
     await turnOn(message);
   } else if (command === "join") {
-    await joinCurrentChannel(message);
+    const voiceChannelId = message.member?.voice.channel?.id;
+    await message.reply(
+      !voiceChannelId
+        ? createUsage(message.client.user.username)
+        : session.channelId === voiceChannelId
+          ? "すでにこの通話に参加しています。"
+          : "いまは別の通話に参加中です。",
+    );
   } else if (command === "leave") {
     await leaveCurrentChannel(message);
   } else {
@@ -230,26 +246,13 @@ async function registerSound(
   }
 }
 
+// Bot が通話にいないときに呼ばれるので、参加できなくても返信はしない
 async function joinCurrentChannel(message: Message<true>): Promise<void> {
   const voiceChannel = message.member?.voice.channel;
-  if (!voiceChannel) {
-    await message.reply(createUsage(message.client.user.username));
-    return;
-  }
-
-  const session = getSession(message.guildId);
-  if (session) {
-    await message.reply(
-      session.channelId === voiceChannel.id
-        ? "すでにこの通話に参加しています。"
-        : "いまは別の通話に参加中です。",
-    );
-    return;
-  }
+  if (!voiceChannel) return;
 
   // 20秒の接続タイムアウトを待たずに、参加できないチャンネルは先に弾く
   if (voiceChannel.type !== ChannelType.GuildVoice || !voiceChannel.joinable) {
-    await message.reply("そのチャンネルには参加できません（権限または満員）。");
     return;
   }
 
@@ -257,11 +260,10 @@ async function joinCurrentChannel(message: Message<true>): Promise<void> {
     await joinChannel(voiceChannel);
   } catch (err) {
     console.error("failed to join via mention:", err);
-    await message.reply("通話への参加に失敗しました。");
   }
 }
 
 async function leaveCurrentChannel(message: Message<true>): Promise<void> {
-  // 退出したかどうかは Bot が通話にいるかを見ればわかるので、どちらも返信しない
+  // 退出したことは Bot が通話から消えるのを見ればわかるので、返信しない
   leaveChannel(message.guildId);
 }

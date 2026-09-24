@@ -4,11 +4,21 @@ import { existsSync } from "node:fs";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { promisify } from "node:util";
 import type { Message } from "discord.js";
-import { handleMessage } from "../src/register.ts";
 import { offPath, soundPath, soundsDir } from "../src/sounds.ts";
+
+// Bot が通話にいないときはコマンドを受け付けないので、通話中として扱う。
+// 通話に出入りする場合の動きは summon.test.ts で確かめている
+mock.module("../src/voice.ts", {
+  namedExports: {
+    getSession: () => ({ channelId: "vc-1" }),
+    joinChannel: async () => {},
+    leaveChannel: () => true,
+  },
+});
+const { handleMessage } = await import("../src/register.ts");
 
 const botId = "1234567890";
 

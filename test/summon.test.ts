@@ -78,14 +78,36 @@ test("VC参加中の引数なしメンションには参加せず使い方を返
   assert.deepEqual(joinedChannelIds, []);
 });
 
-test("VC未参加の引数なしメンションにも使い方を返信する", async () => {
+test("Botが通話にいないときは引数なしメンションにも返信しない", async () => {
   const replies: unknown[] = [];
 
   await handleMessage(createMention("", null, async (payload) => replies.push(payload)));
 
+  assert.deepEqual(replies, []);
+  assert.deepEqual(joinedChannelIds, []);
+});
+
+test("Botが通話にいないときはcheckなどのコマンドも実行しない", async () => {
+  const replies: unknown[] = [];
+
+  for (const command of ["check", "delete", "off", "on", "unknown"]) {
+    await handleMessage(
+      createMention(command, "vc-1", async (payload) => replies.push(payload)),
+    );
+  }
+
+  assert.deepEqual(replies, []);
+  assert.deepEqual(joinedChannelIds, [], "join 以外では参加もしない");
+});
+
+test("参加中のVCから自分がいないjoinには使い方を返信する", async () => {
+  session = { channelId: "vc-1" };
+  const replies: unknown[] = [];
+
+  await handleMessage(createMention("join", null, async (payload) => replies.push(payload)));
+
   assert.equal(replies.length, 1);
   assert.match(String(replies[0]), /^使い方:/);
-  assert.deepEqual(joinedChannelIds, []);
 });
 
 test("joinならメンション元のVCに参加する", async () => {
@@ -117,34 +139,33 @@ test("参加中に別のVCからjoinされたら参加中メッセージを返�
   assert.deepEqual(joinedChannelIds, []);
 });
 
-test("VCに入っていないjoinには使い方を返信する", async () => {
+test("Botが通話にいないとき、VCに入っていない人のjoinには返信しない", async () => {
   const replies: unknown[] = [];
 
   await handleMessage(createMention("join", null, async (payload) => replies.push(payload)));
 
-  assert.equal(replies.length, 1);
-  assert.match(String(replies[0]), /^使い方:/);
+  assert.deepEqual(replies, []);
   assert.deepEqual(joinedChannelIds, []);
 });
 
-test("参加できないVCへのjoinには理由を返信する", async () => {
+test("参加できないVCへのjoinには返信しない", async () => {
   const replies: unknown[] = [];
 
   await handleMessage(
     createMention("join", "vc-1", async (payload) => replies.push(payload), false),
   );
 
-  assert.deepEqual(replies, ["そのチャンネルには参加できません（権限または満員）。"]);
+  assert.deepEqual(replies, []);
   assert.deepEqual(joinedChannelIds, []);
 });
 
-test("通話への接続に失敗したjoinには失敗を返信する", async () => {
+test("通話への接続に失敗したjoinには返信しない", async () => {
   joinError = new Error("connection failed");
   const replies: unknown[] = [];
 
   await handleMessage(createMention("join", "vc-1", async (payload) => replies.push(payload)));
 
-  assert.deepEqual(replies, ["通話への参加に失敗しました。"]);
+  assert.deepEqual(replies, []);
   assert.deepEqual(joinedChannelIds, []);
 });
 

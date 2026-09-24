@@ -3,7 +3,12 @@ import { existsSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { afterEach, beforeEach, mock } from "node:test";
-import { RESTJSONErrorCodes, type Interaction, type Message } from "discord.js";
+import {
+  MessageFlags,
+  RESTJSONErrorCodes,
+  type Interaction,
+  type Message,
+} from "discord.js";
 import { soundsDir } from "../src/sounds.ts";
 
 // 読み上げの順番は queue.test.ts で確かめているので、ここでは何をキューに積むかだけ見る
@@ -87,6 +92,7 @@ async function runReadChannel(
   const interaction = {
     isChatInputCommand: () => true,
     commandName: "shaberu-ch",
+    guildId: "test-guild",
     channelId,
     guild: { channels: { cache: { has: (id: string) => guildChannelIds.includes(id) } } },
     options: { getSubcommand: () => subcommand },
@@ -229,6 +235,31 @@ test("画像や動画以外の添付だけの発言は読まない", () => {
   readChatMessage(chatMessage("vc-1", "", { attachments }));
 
   assert.deepEqual(enqueued, []);
+});
+
+test("Botが通話にいないときはスラッシュコマンドを実行せず本人にだけ断る", async () => {
+  session = undefined;
+  const replies: unknown[] = [];
+  const interaction = {
+    isChatInputCommand: () => true,
+    commandName: "shaberu-ch",
+    guildId: "test-guild",
+    channelId: "text-1",
+    options: { getSubcommand: () => "add" },
+    reply: async (payload: unknown) => {
+      replies.push(payload);
+    },
+  } as unknown as Interaction;
+
+  await handleInteraction(interaction);
+
+  assert.deepEqual(replies, [
+    {
+      content: "Bot が通話に参加していないときは使えません。",
+      flags: MessageFlags.Ephemeral,
+    },
+  ]);
+  assert.equal(existsSync(channelsPath), false, "登録しない");
 });
 
 test("addでこのチャンネルを読み上げ対象にする", async () => {
