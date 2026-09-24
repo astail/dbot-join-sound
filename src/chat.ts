@@ -102,15 +102,14 @@ export function readChatMessage(message: Message): void {
 }
 
 /**
- * VC 付属チャットで人が書いた発言を一定時間後に消す。Bot の返信は残す
- * （`delete` の返信には削除した入室音の控えが添付されるため）。
+ * VC 付属チャットの発言を、Bot 自身の返信も含めて一定時間後に消す。
+ * 普通のテキストチャンネルの発言は、誰のものでも消さない。
  */
 export function scheduleVcChatDeletion(
   message: Message,
   seconds = vcChatDeleteSeconds,
 ): void {
   if (seconds === 0) return;
-  if (message.author.bot) return;
   if (!message.inGuild() || !message.channel.isVoiceBased()) return;
 
   setTimeout(() => {

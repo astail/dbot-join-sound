@@ -272,8 +272,17 @@ test.describe("VC付属チャットの自動削除", () => {
     assert.equal(deleted(), 0);
   });
 
-  test("Botの発言は消さない", () => {
+  test("VC付属チャットならBotの発言も消す", () => {
     const { message, deleted } = deletable(true, undefined, true);
+
+    scheduleVcChatDeletion(message, 30);
+    mock.timers.tick(30_000);
+
+    assert.equal(deleted(), 1);
+  });
+
+  test("VC付属チャット以外ではBotの発言も消さない", () => {
+    const { message, deleted } = deletable(false, undefined, true);
 
     scheduleVcChatDeletion(message, 30);
     mock.timers.tick(30_000);
