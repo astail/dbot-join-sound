@@ -19,7 +19,7 @@ import {
   offPath,
   soundPath,
 } from "./sounds.js";
-import { synthesizeNotice, type NoticeKind } from "./voicevox.js";
+import { synthesize, synthesizeNotice, type NoticeKind } from "./voicevox.js";
 import { applyYomi } from "./yomi.js";
 
 const DEFAULT_PLAYBACK_VOLUME = 0.4;
@@ -90,8 +90,12 @@ const voicevoxVolume = resolveVoicevoxVolume(process.env.VOICEVOX_VOLUME);
 const defaultFadeInMs = resolveFadeInMs(process.env.JOIN_SOUND_FADE_IN_MS);
 const announceDelayMs = resolveAnnounceDelayMs(process.env.ANNOUNCE_DELAY_MS);
 
-// 入室で登録済みなら音声ファイル、それ以外は読み上げる名前と入退室の別
-type QueueItem = { path: string } | { name: string; kind: NoticeKind };
+// 入室で登録済みなら音声ファイル、それ以外は読み上げる名前と入退室の別。
+// チャットの読み上げは本文をそのまま持つ
+type QueueItem =
+  | { path: string }
+  | { name: string; kind: NoticeKind }
+  | { text: string };
 
 type Session = {
   channelId: string;
@@ -222,6 +226,14 @@ function enqueue(
   }
 }
 
+// チャットの本文を入退室と同じキューに積み、入退室の音と重ならないようにする
+export function enqueueText(session: Session, text: string): void {
+  session.queue.push({ text });
+  if (session.player.state.status === AudioPlayerStatus.Idle) {
+    void playNext(session);
+  }
+}
+
 // 合成に失敗した項目は飛ばして、次に再生できるものを探す
 async function playNext(session: Session): Promise<void> {
   if (session.playing) return;
@@ -245,7 +257,10 @@ async function playNext(session: Session): Promise<void> {
         return; // 続きは Idle イベントが呼び出す
       }
 
-      const wav = await synthesizeNotice(item.name, item.kind);
+      const wav =
+        "text" in item
+          ? await synthesize(item.text)
+          : await synthesizeNotice(item.name, item.kind);
       if (pause) await pause;
       // 待つ間に全員退出していたら再生しない。購読者のいない player は
       // AutoPaused のままになり、変換中の ffmpeg が終了しなくなる

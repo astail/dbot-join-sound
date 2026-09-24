@@ -2,11 +2,20 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import test, { afterEach } from "node:test";
+import test, { afterEach, mock } from "node:test";
 import type { Interaction } from "discord.js";
-import { handleInteraction } from "../src/commands.ts";
 import { soundsDir } from "../src/sounds.ts";
 import { applyYomi, readDict, writeDict } from "../src/yomi.ts";
+
+// Bot が通話にいないときはコマンドを受け付けないので、通話中として扱う。
+// 通話にいないときの動きは chat.test.ts で確かめている
+mock.module("../src/voice.ts", {
+  namedExports: {
+    getSession: () => ({ channelId: "vc-1" }),
+    enqueueText: () => {},
+  },
+});
+const { handleInteraction } = await import("../src/commands.ts");
 
 // 辞書は sounds/yomi.json ひとつを共有するため、ファイルを触るテストは
 // この 1 ファイルにまとめて、テストごとに消す（node:test はファイル内では直列に走る）
@@ -25,6 +34,7 @@ async function runCommand(
   const interaction = {
     isChatInputCommand: () => true,
     commandName: "yomi",
+    guildId: "test-guild",
     options: {
       getSubcommand: () => subcommand,
       getString: (name: string) => options[name] ?? null,

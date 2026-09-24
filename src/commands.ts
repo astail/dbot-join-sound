@@ -1,8 +1,11 @@
 import {
+  MessageFlags,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type Interaction,
 } from "discord.js";
+import { readChannels, writeChannels } from "./chat.js";
+import { getSession } from "./voice.js";
 import {
   MAX_READING_LENGTH,
   MAX_WORD_LENGTH,
@@ -55,13 +58,47 @@ export const commands = [
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("登録されている読み方の一覧を表示します"),
     ),
+  // Discord 標準の /tts や、読み方の /yomi と紛らわしくならない名前にする
+  new SlashCommandBuilder()
+    .setName("shaberu-ch")
+    .setDescription("VC 付属チャット以外で、チャットを読み上げるチャンネルを設定します")
+    .addSubcommand((sub) =>
+      sub.setName("add").setDescription("このチャンネルのチャットを読み上げます"),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("remove").setDescription("このチャンネルのチャットを読み上げないようにします"),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("読み上げるチャンネルの一覧を表示します"),
+    ),
 ].map((command) => command.toJSON());
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "yomi") return;
+
+  // Bot が通話にいないときはチャットに何も書き込まないので、コマンドも実行しない。
+  // 応答しないと Discord が本人にエラーを見せるため、本人にだけ見える一時メッセージで断る
+  if (!interaction.guildId || !getSession(interaction.guildId)) {
+    await interaction.reply({
+      content: "Bot が通話に参加していないときは使えません。",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
   const subcommand = interaction.options.getSubcommand();
+  if (interaction.commandName === "shaberu-ch") {
+    if (subcommand === "add") {
+      await addChannel(interaction);
+    } else if (subcommand === "remove") {
+      await removeChannel(interaction);
+    } else if (subcommand === "list") {
+      await listChannels(interaction);
+    }
+    return;
+  }
+  if (interaction.commandName !== "yomi") return;
+
   if (subcommand === "set") {
     await setYomi(interaction);
   } else if (subcommand === "delete") {
@@ -128,5 +165,43 @@ async function listYomi(interaction: ChatInputCommandInteraction): Promise<void>
   await interaction.reply(
     `登録されている読み方:\n\`\`\`\n${shown.join("\n")}\n\`\`\`` +
       (omitted > 0 ? `ほか ${omitted} 件は長さの都合で省略しました。` : ""),
+  );
+}
+
+async function addChannel(interaction: ChatInputCommandInteraction): Promise<void> {
+  const channels = readChannels();
+  if (channels.includes(interaction.channelId)) {
+    await interaction.reply("このチャンネルはすでに読み上げる設定です。");
+    return;
+  }
+  await writeChannels([...channels, interaction.channelId]);
+  await interaction.reply(
+    "このチャンネルのチャットを読み上げるようにしました（Bot が通話に参加している間だけ）。",
+  );
+}
+
+async function removeChannel(interaction: ChatInputCommandInteraction): Promise<void> {
+  const channels = readChannels();
+  if (!channels.includes(interaction.channelId)) {
+    await interaction.reply("このチャンネルは読み上げる設定になっていません。");
+    return;
+  }
+  await writeChannels(channels.filter((id) => id !== interaction.channelId));
+  await interaction.reply("このチャンネルのチャットを読み上げないようにしました。");
+}
+
+async function listChannels(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 一覧は全サーバー共通なので、実行したサーバーのチャンネルだけ見せる
+  const channels = readChannels().filter((id) =>
+    interaction.guild?.channels.cache.has(id),
+  );
+  if (channels.length === 0) {
+    await interaction.reply(
+      "読み上げるチャンネルは登録されていません（Bot が参加中の VC 付属チャットは登録なしで読み上げます）。",
+    );
+    return;
+  }
+  await interaction.reply(
+    `読み上げるチャンネル:\n${channels.map((id) => `<#${id}>`).join("\n")}`,
   );
 }

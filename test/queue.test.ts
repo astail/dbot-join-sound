@@ -53,13 +53,18 @@ mock.module("../src/yomi.ts", {
   },
 });
 
-// 外部サービス（VOICEVOX）はモックする。読み上げは "<kind>:<読み上げる名前>" で記録する
+// 外部サービス（VOICEVOX）はモックする。読み上げは "<kind>:<読み上げる名前>"、
+// チャットは "chat:<本文>" で記録する
 const synthesized: string[] = [];
 let synthesis: () => Promise<Buffer | null> = async () => Buffer.from("wav");
 mock.module("../src/voicevox.ts", {
   namedExports: {
     synthesizeNotice: async (displayName: string, kind: string) => {
       synthesized.push(`${kind}:${displayName}`);
+      return synthesis();
+    },
+    synthesize: async (text: string) => {
+      synthesized.push(`chat:${text}`);
       return synthesis();
     },
   },
@@ -72,7 +77,9 @@ process.env.ANNOUNCE_DELAY_MS = String(ANNOUNCE_DELAY_MS);
 // 実タイマーが走り続ける
 process.env.JOIN_SOUND_FADE_IN_MS = "0";
 
-const { handleVoiceStateUpdate } = await import("../src/voice.ts");
+const { enqueueText, getSession, handleVoiceStateUpdate } = await import(
+  "../src/voice.ts"
+);
 
 // 一拍置く待ちを消化して、再生が始まるところまで進める。setImmediate は差し替えて
 // いないので、待つ代わりにマイクロタスクを流し切る用途で使える
@@ -415,4 +422,24 @@ test("退室の読み上げにも読みを使う", async () => {
   await finishPlayback();
 
   assert.deepEqual(synthesized, ["join:まめ", "leave:まめ"]);
+});
+
+test("チャットは入退室と同じキューで順番に読み上げる", async () => {
+  const registered = await registerSound("u-chat-1");
+
+  await join(registered, "アステル");
+  const session = getSession(guildId);
+  assert.ok(session);
+  enqueueText(session, "こんにちは");
+  await join("u-chat-2", "ほか");
+
+  await finishPlayback();
+  await finishPlayback();
+
+  assert.deepEqual(
+    played.map((r) => r.inputType),
+    [StreamType.OggOpus, StreamType.Arbitrary, StreamType.Arbitrary],
+    "再生中の入室音に重ねない",
+  );
+  assert.deepEqual(synthesized, ["chat:こんにちは", "join:ほか"]);
 });

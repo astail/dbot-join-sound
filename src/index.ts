@@ -5,6 +5,7 @@ import {
   GatewayIntentBits,
   type Guild,
 } from "discord.js";
+import { readChatMessage, scheduleVcChatDeletion } from "./chat.js";
 import { commands, handleInteraction } from "./commands.js";
 import { handleMessage } from "./register.js";
 import { handleVoiceStateUpdate } from "./voice.js";
@@ -23,6 +24,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
+    // チャットの読み上げに本文が要る。Developer Portal での有効化が必要な特権 Intent
+    GatewayIntentBits.MessageContent,
   ],
   // ClientReady で設定すると再接続のたびに消えるため、IDENTIFY に載せる
   presence: {
@@ -52,6 +55,8 @@ client.on(Events.Error, (err) => {
 });
 
 client.on(Events.MessageCreate, (message) => {
+  scheduleVcChatDeletion(message);
+  readChatMessage(message);
   handleMessage(message).catch((err) =>
     console.error("messageCreate handler failed:", err),
   );

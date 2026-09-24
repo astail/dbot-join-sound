@@ -28,15 +28,19 @@ const timeoutMs = resolveTimeoutMs(process.env.VOICEVOX_TIMEOUT_MS);
 
 export type NoticeKind = "join" | "leave";
 
-/**
- * 入退室案内の音声（WAV）を合成する。VOICEVOX が落ちていても Bot を止めないため、
- * 失敗はここで握り潰して null を返す。
- */
+/** 入退室案内の音声（WAV）を合成する。 */
 export async function synthesizeNotice(
   name: string,
   kind: NoticeKind,
 ): Promise<Buffer | null> {
-  const text = `${name}が${kind === "join" ? "入室" : "退室"}しました`;
+  return synthesize(`${name}が${kind === "join" ? "入室" : "退室"}しました`);
+}
+
+/**
+ * 文章をそのまま読み上げる音声（WAV）を合成する。VOICEVOX が落ちていても Bot を
+ * 止めないため、失敗はここで握り潰して null を返す。
+ */
+export async function synthesize(text: string): Promise<Buffer | null> {
   try {
     // 読みと抑揚を決める audio_query の結果を、そのまま synthesis へ渡す 2 段構成
     const query = await fetch(
