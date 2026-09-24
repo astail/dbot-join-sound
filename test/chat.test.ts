@@ -41,9 +41,9 @@ const {
 } = await import("../src/chat.ts");
 const { handleInteraction } = await import("../src/commands.ts");
 
-// 一覧は sounds/readchannel.json ひとつを共有するため、ファイルを触るテストは
+// 一覧は sounds/shaberu-ch.json ひとつを共有するため、ファイルを触るテストは
 // この 1 ファイルにまとめて、テストごとに消す（node:test はファイル内では直列に走る）
-const channelsPath = join(soundsDir, "readchannels.json");
+const channelsPath = join(soundsDir, "shaberu-ch.json");
 
 const botId = "1234567890";
 
@@ -82,7 +82,7 @@ async function runReadChannel(
   const replies: string[] = [];
   const interaction = {
     isChatInputCommand: () => true,
-    commandName: "readchannel",
+    commandName: "shaberu-ch",
     channelId,
     guild: { channels: { cache: { has: (id: string) => guildChannelIds.includes(id) } } },
     options: { getSubcommand: () => subcommand },

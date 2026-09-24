@@ -39,7 +39,7 @@ const vcChatDeleteSeconds = resolveVcChatDeleteSeconds(
 
 // VC 付属チャット以外で読み上げるチャンネルの ID。サーバーをまたいで共通の
 // 1 ファイルに持つ（チャンネル ID は Discord 全体で一意なので混ざらない）
-const channelsPath = join(soundsDir, "readchannels.json");
+const channelsPath = join(soundsDir, "shaberu-ch.json");
 
 export function readChannels(): string[] {
   if (!existsSync(channelsPath)) return [];
@@ -79,7 +79,7 @@ export function toSpeechText(content: string): string {
 }
 
 /**
- * Bot が参加中の VC の付属チャットと、`/readchannel add` で登録したチャンネルの
+ * Bot が参加中の VC の付属チャットと、`/shaberu-ch add` で登録したチャンネルの
  * 発言を読み上げる。Bot が VC にいないサーバーの発言は読まない。
  */
 export function readChatMessage(message: Message): void {

@@ -58,7 +58,7 @@ export const commands = [
     ),
   // Discord 標準の /tts や、読み方の /yomi と紛らわしくならない名前にする
   new SlashCommandBuilder()
-    .setName("readchannel")
+    .setName("shaberu-ch")
     .setDescription("VC 付属チャット以外で、チャットを読み上げるチャンネルを設定します")
     .addSubcommand((sub) =>
       sub.setName("add").setDescription("このチャンネルのチャットを読み上げます"),
@@ -75,7 +75,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   if (!interaction.isChatInputCommand()) return;
 
   const subcommand = interaction.options.getSubcommand();
-  if (interaction.commandName === "readchannel") {
+  if (interaction.commandName === "shaberu-ch") {
     if (subcommand === "add") {
       await addChannel(interaction);
     } else if (subcommand === "remove") {
