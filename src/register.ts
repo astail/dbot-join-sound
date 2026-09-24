@@ -262,8 +262,6 @@ async function joinCurrentChannel(message: Message<true>): Promise<void> {
 }
 
 async function leaveCurrentChannel(message: Message<true>): Promise<void> {
-  // 退出したことは Bot が通話から消えるのを見ればわかるので、返信しない
-  if (!leaveChannel(message.guildId)) {
-    await message.reply("通話に参加していません。");
-  }
+  // 退出したかどうかは Bot が通話にいるかを見ればわかるので、どちらも返信しない
+  leaveChannel(message.guildId);
 }

@@ -158,11 +158,11 @@ test("leaveなら参加中の通話から退出する", async () => {
   assert.deepEqual(replies, [], "退出したことは返信しない");
 });
 
-test("未参加のleaveにはその旨を返信する", async () => {
+test("未参加のleaveには返信しない", async () => {
   const replies: unknown[] = [];
 
   await handleMessage(createMention("leave", null, async (payload) => replies.push(payload)));
 
   assert.deepEqual(leftGuildIds, []);
-  assert.deepEqual(replies, ["通話に参加していません。"]);
+  assert.deepEqual(replies, []);
 });
