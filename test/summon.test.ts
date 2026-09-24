@@ -155,7 +155,7 @@ test("leaveなら参加中の通話から退出する", async () => {
   await handleMessage(createMention("leave", null, async (payload) => replies.push(payload)));
 
   assert.deepEqual(leftGuildIds, ["test-guild"]);
-  assert.deepEqual(replies, ["通話から退出しました。"]);
+  assert.deepEqual(replies, [], "退出したことは返信しない");
 });
 
 test("未参加のleaveにはその旨を返信する", async () => {
