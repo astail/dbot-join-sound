@@ -5,7 +5,7 @@ import {
   type Interaction,
 } from "discord.js";
 import { readChannels, writeChannels } from "./chat.js";
-import { getSession } from "./voice.js";
+import { hasSessionInGuild } from "./voice.js";
 import {
   MAX_READING_LENGTH,
   MAX_WORD_LENGTH,
@@ -77,8 +77,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   if (!interaction.isChatInputCommand()) return;
 
   // Bot が通話にいないときはチャットに何も書き込まないので、コマンドも実行しない。
-  // 応答しないと Discord が本人にエラーを見せるため、本人にだけ見える一時メッセージで断る
-  if (!interaction.guildId || !getSession(interaction.guildId)) {
+  // 応答しないと Discord が本人にエラーを見せるため、本人にだけ見える一時メッセージで断る。
+  // コマンドは 1 体目の Bot にだけ登録するので、どの Bot が通話にいても受け付ける
+  if (!interaction.guildId || !hasSessionInGuild(interaction.guildId)) {
     await interaction.reply({
       content: "Bot が通話に参加していないときは使えません。",
       flags: MessageFlags.Ephemeral,

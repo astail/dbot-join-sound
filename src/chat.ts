@@ -119,12 +119,16 @@ export function readChatMessage(
   readVcChat = vcChatReadEnabled,
 ): void {
   if (message.author.bot || !message.inGuild()) return;
-  const session = getSession(message.guildId);
+  const session = getSession(message.client.user.id, message.guildId);
   if (!session) return;
   const isVcChat = readVcChat && message.channelId === session.channelId;
   if (!isVcChat && !readChannels().includes(message.channelId)) return;
-  // Bot へのメンションはコマンドなので読まない
-  if (new RegExp(`<@!?${message.client.user.id}>`).test(message.content)) return;
+  // Bot へのメンションはコマンドなので読まない。Bot を複数動かしているときは
+  // 別の Bot 宛てのコマンドも読まないよう、自分以外の Bot へのメンションも対象にする
+  const mentionsBot = [...message.content.matchAll(/<@!?(\d+)>/g)].some(
+    ([, id]) => id === message.client.user.id || message.mentions.users.get(id)?.bot,
+  );
+  if (mentionsBot) return;
 
   // cleanContent はメンションを <@id> ではなく @表示名 に直したもの
   const text = [
@@ -149,7 +153,9 @@ export function scheduleVcChatDeletion(
   if (seconds === 0) return;
   if (!message.inGuild()) return;
   // セッションのチャンネルは常に VC なので、一致すれば VC 付属チャットに限られる
-  if (getSession(message.guildId)?.channelId !== message.channelId) return;
+  if (getSession(message.client.user.id, message.guildId)?.channelId !== message.channelId) {
+    return;
+  }
 
   setTimeout(() => {
     message.delete().catch((err: unknown) => {

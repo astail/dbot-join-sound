@@ -8,17 +8,21 @@ let session: { channelId: string } | undefined;
 const joinedChannelIds: string[] = [];
 const leftGuildIds: string[] = [];
 let joinError: Error | undefined;
+// 別の Bot が参加中のチャンネル
+let attendedChannelIds: string[] = [];
 // exports は Node 24 で namedExports を置き換えた新オプションだが、engines と
 // Dockerfile が対象とする Node 22 では無視され、名前付き export が消えてしまう。
 // 非推奨警告は出るが、22 と 24 の両方で動く namedExports を使う
 mock.module("../src/voice.ts", {
   namedExports: {
     getSession: () => session,
+    isChannelAttended: (_guildId: string, channelId: string) =>
+      attendedChannelIds.includes(channelId),
     joinChannel: async (channel: { id: string }) => {
       if (joinError) throw joinError;
       joinedChannelIds.push(channel.id);
     },
-    leaveChannel: (guildId: string) => {
+    leaveChannel: (_botId: string, guildId: string) => {
       if (!session) return false;
       leftGuildIds.push(guildId);
       session = undefined;
@@ -58,6 +62,7 @@ function createMention(
 
 beforeEach(() => {
   session = undefined;
+  attendedChannelIds = [];
   joinedChannelIds.length = 0;
   leftGuildIds.length = 0;
   joinError = undefined;
@@ -116,6 +121,16 @@ test("joinならメンション元のVCに参加する", async () => {
   await handleMessage(createMention("join", "vc-1", async (payload) => replies.push(payload)));
 
   assert.deepEqual(joinedChannelIds, ["vc-1"]);
+  assert.deepEqual(replies, []);
+});
+
+test("別のBotがいるVCからjoinされても参加しない", async () => {
+  attendedChannelIds = ["vc-1"];
+  const replies: unknown[] = [];
+
+  await handleMessage(createMention("join", "vc-1", async (payload) => replies.push(payload)));
+
+  assert.deepEqual(joinedChannelIds, []);
   assert.deepEqual(replies, []);
 });
 

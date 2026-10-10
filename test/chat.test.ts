@@ -17,6 +17,7 @@ const enqueued: string[] = [];
 mock.module("../src/voice.ts", {
   namedExports: {
     getSession: () => session,
+    hasSessionInGuild: () => session !== undefined,
     enqueueText: (_session: unknown, text: string) => {
       enqueued.push(text);
     },
@@ -79,6 +80,13 @@ function chatMessage(
     content,
     cleanContent: content,
     client: { user: { id: botId } },
+    // 本文中でメンションされたユーザー。Bot かどうかだけ見る
+    mentions: {
+      users: new Map([
+        ["2222222222", { bot: true }],
+        ["3333333333", { bot: false }],
+      ]),
+    },
   } as unknown as Message;
 }
 
@@ -211,6 +219,13 @@ test("Botの発言とBotへのコマンドは読まない", () => {
   readChatMessage(chatMessage("vc-1", `<@${botId}> check`));
 
   assert.deepEqual(enqueued, []);
+});
+
+test("別のBotへのコマンドは読まず、人へのメンションは読む", () => {
+  readChatMessage(chatMessage("vc-1", "<@2222222222> join"));
+  readChatMessage(chatMessage("vc-1", "<@3333333333> こんにちは"));
+
+  assert.deepEqual(enqueued, ["<@3333333333> こんにちは"]);
 });
 
 test("VC付属チャットの読み上げを止めても指定チャンネルは読む", async () => {
