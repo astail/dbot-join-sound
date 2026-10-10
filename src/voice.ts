@@ -370,6 +370,16 @@ export async function handleVoiceStateUpdate(
       destroySession(botId, guildId, session);
       return;
     }
+    // 別の Bot がいる通話へ移されたら、二重に鳴らさないよう自分が抜ける。参加直後や
+    // ミュート切替でも自分のイベントは届くので、チャンネルが変わったときだけ見る
+    // （そのときは自分のセッションがまだ移動元を指すので、自分自身には当たらない）
+    if (
+      newState.channelId !== session.channelId &&
+      isChannelAttended(guildId, newState.channelId)
+    ) {
+      destroySession(botId, guildId, session);
+      return;
+    }
     session.channelId = newState.channelId;
     // 無人チャンネルへ移動させられた場合も「全員退出で即切断」に合わせて抜ける
     const humans =

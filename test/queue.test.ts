@@ -477,3 +477,34 @@ test("Bot が通話中でも、別の通話には空いている Bot が参加�
   assert.equal(getSession("bot-a", guildId)?.channelId, "vc-1");
   assert.equal(getSession("bot-b", guildId)?.channelId, "vc-2");
 });
+
+// Bot 自身の状態更新（移動させられた、参加が反映された等）
+async function botMoved(
+  botId: string,
+  from: string | null,
+  to: string | null,
+): Promise<void> {
+  await handleVoiceStateUpdate(
+    voiceState(botId, undefined, from, 1, botId),
+    voiceState(botId, undefined, to, 1, botId),
+  );
+  await settle();
+}
+
+test("別の Bot がいる通話へ移されたら、二重に鳴らさないよう自分が抜ける", async () => {
+  await joinSeenByBots("u-multi-4", "vc-1", ["bot-a", "bot-b"]);
+  await joinSeenByBots("u-multi-5", "vc-2", ["bot-a", "bot-b"]);
+
+  await botMoved("bot-a", "vc-1", "vc-2");
+
+  assert.equal(getSession("bot-a", guildId), undefined);
+  assert.equal(getSession("bot-b", guildId)?.channelId, "vc-2");
+});
+
+test("参加の反映など、同じチャンネルのままの自分の状態更新では抜けない", async () => {
+  await joinSeenByBots("u-multi-6", "vc-1", ["bot-a", "bot-b"]);
+
+  await botMoved("bot-a", null, "vc-1");
+
+  assert.equal(getSession("bot-a", guildId)?.channelId, "vc-1");
+});
