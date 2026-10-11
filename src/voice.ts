@@ -404,8 +404,13 @@ export async function handleVoiceStateUpdate(
       destroySession(botId, guildId, session);
       return;
     }
-    // 残っている人に向けた退室の読み上げ
-    enqueue(session, oldState.id, oldState.member?.displayName, "leave");
+    // 残っている人に向けた退室の読み上げ。別の VC へ移っただけなら移動と読む
+    enqueue(
+      session,
+      oldState.id,
+      oldState.member?.displayName,
+      newState.channelId ? "move" : "leave",
+    );
     return;
   }
 

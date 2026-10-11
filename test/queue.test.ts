@@ -408,7 +408,7 @@ test("退室すると登録音があっても読み上げられる", async () =>
   assert.deepEqual(synthesized, ["leave:アステル"], "退室音は登録できない");
 });
 
-test("別のチャンネルへ移動した人も退室として読み上げられる", async () => {
+test("別のチャンネルへ移動した人は移動として読み上げられる", async () => {
   const registered = await registerSound("u-leave-2");
 
   await join(registered, "アステル");
@@ -418,7 +418,7 @@ test("別のチャンネルへ移動した人も退室として読み上げら�
   );
   await finishPlayback();
 
-  assert.deepEqual(synthesized, ["leave:アステル"]);
+  assert.deepEqual(synthesized, ["move:アステル"]);
 });
 
 test("最後の1人が退室したら読み上げない", async () => {
