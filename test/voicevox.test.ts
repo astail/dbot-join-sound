@@ -1,23 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  resolveSpeaker,
-  resolveTimeoutMs,
-  synthesizeNotice,
-  type NoticeKind,
-} from "../src/voicevox.ts";
+import type { NoticeKind } from "../src/voicevox.ts";
+
+// 1 体目はひまり（14）、2 体目は猫使ビィ（58）
+process.env.VOICEVOX_SPEAKER = "14,58";
+const { assignSpeaker, resolveSpeakers, resolveTimeoutMs, synthesizeNotice } =
+  await import("../src/voicevox.ts");
 
 // VOICEVOX を呼ばずに合成させ、リクエスト先と返した WAV を確認する
 async function synthesizeWith(
   fetchStub: typeof globalThis.fetch,
   kind: NoticeKind = "join",
+  botId = "bot-1",
 ): Promise<Buffer | null> {
   const originalFetch = globalThis.fetch;
   const originalConsoleError = console.error;
   globalThis.fetch = fetchStub;
   console.error = () => {};
   try {
-    return await synthesizeNotice("アステル", kind);
+    return await synthesizeNotice("アステル", kind, botId);
   } finally {
     globalThis.fetch = originalFetch;
     console.error = originalConsoleError;
@@ -25,16 +26,48 @@ async function synthesizeWith(
 }
 
 test("話者IDのデフォルトは冥鳴ひまり（14）", () => {
-  assert.equal(resolveSpeaker(undefined), 14);
-  assert.equal(resolveSpeaker(""), 14);
-  assert.equal(resolveSpeaker("0"), 0);
-  assert.equal(resolveSpeaker("47"), 47);
+  assert.deepEqual(resolveSpeakers(undefined), [14]);
+  assert.deepEqual(resolveSpeakers(""), [14]);
+  assert.deepEqual(resolveSpeakers("0"), [0]);
+  assert.deepEqual(resolveSpeakers("47"), [47]);
+});
+
+test("話者IDをカンマ区切りでBotごとに指定できる", () => {
+  assert.deepEqual(resolveSpeakers("14,58"), [14, 58]);
+  assert.deepEqual(resolveSpeakers(" 14 , 58 "), [14, 58]);
 });
 
 test("不正な話者IDを拒否する", () => {
-  assert.throws(() => resolveSpeaker("-1"), /0 以上の整数/);
-  assert.throws(() => resolveSpeaker("1.5"), /0 以上の整数/);
-  assert.throws(() => resolveSpeaker("zundamon"), /0 以上の整数/);
+  assert.throws(() => resolveSpeakers("-1"), /0 以上の整数/);
+  assert.throws(() => resolveSpeakers("1.5"), /0 以上の整数/);
+  assert.throws(() => resolveSpeakers("zundamon"), /0 以上の整数/);
+  assert.throws(() => resolveSpeakers("14,"), /0 以上の整数/);
+  assert.throws(() => resolveSpeakers("14,,58"), /0 以上の整数/);
+});
+
+// VOICEVOX へ送った話者 ID を返す
+async function speakerFor(botId: string): Promise<string | undefined> {
+  const urls: string[] = [];
+  await synthesizeWith(async (input) => {
+    urls.push(String(input));
+    return String(input).includes("/audio_query")
+      ? new Response('{"accent_phrases":[]}')
+      : new Response(Buffer.from("RIFF-fake-wav"));
+  }, "join", botId);
+  return urls[0].match(/speaker=(\d+)$/)?.[1];
+}
+
+test("Botごとに割り当てた話者で読む", async () => {
+  assignSpeaker("bot-a", 0);
+  assignSpeaker("bot-b", 1);
+  assert.equal(await speakerFor("bot-a"), "14");
+  assert.equal(await speakerFor("bot-b"), "58");
+});
+
+test("話者の指定が足りないBotと割り当てのないBotは1つ目の話者で読む", async () => {
+  assignSpeaker("bot-c", 2);
+  assert.equal(await speakerFor("bot-c"), "14");
+  assert.equal(await speakerFor("unknown-bot"), "14");
 });
 
 test("タイムアウトのデフォルトは10秒", () => {

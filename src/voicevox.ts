@@ -2,14 +2,17 @@ const DEFAULT_URL = "http://voicevox:50021";
 const DEFAULT_SPEAKER = 14; // 冥鳴ひまり（ノーマル）
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export function resolveSpeaker(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return DEFAULT_SPEAKER;
+// DISCORD_TOKEN と同じ順にカンマ区切りで並べ、Bot ごとに声を変えられる
+export function resolveSpeakers(value: string | undefined): number[] {
+  if (value === undefined || value.trim() === "") return [DEFAULT_SPEAKER];
 
-  const speaker = Number(value);
-  if (!Number.isInteger(speaker) || speaker < 0) {
-    throw new Error("VOICEVOX_SPEAKER は 0 以上の整数で指定してください");
-  }
-  return speaker;
+  return value.split(",").map((part) => {
+    const speaker = Number(part.trim());
+    if (part.trim() === "" || !Number.isInteger(speaker) || speaker < 0) {
+      throw new Error("VOICEVOX_SPEAKER は 0 以上の整数で指定してください");
+    }
+    return speaker;
+  });
 }
 
 export function resolveTimeoutMs(value: string | undefined): number {
@@ -23,8 +26,16 @@ export function resolveTimeoutMs(value: string | undefined): number {
 }
 
 const baseUrl = (process.env.VOICEVOX_URL ?? DEFAULT_URL).replace(/\/$/, "");
-const speaker = resolveSpeaker(process.env.VOICEVOX_SPEAKER);
+const speakers = resolveSpeakers(process.env.VOICEVOX_SPEAKER);
 const timeoutMs = resolveTimeoutMs(process.env.VOICEVOX_TIMEOUT_MS);
+
+// Bot の ID ごとの話者。割り当てのない Bot は 1 つ目の話者で読む
+const botSpeakers = new Map<string, number>();
+
+/** index 番目のトークンの Bot に、VOICEVOX_SPEAKER の index 番目の話者を割り当てる。 */
+export function assignSpeaker(botId: string, index: number): void {
+  botSpeakers.set(botId, speakers[index] ?? speakers[0]);
+}
 
 export type NoticeKind = "join" | "leave";
 
@@ -32,15 +43,20 @@ export type NoticeKind = "join" | "leave";
 export async function synthesizeNotice(
   name: string,
   kind: NoticeKind,
+  botId: string,
 ): Promise<Buffer | null> {
-  return synthesize(`${name}が${kind === "join" ? "入室" : "退室"}しました`);
+  return synthesize(`${name}が${kind === "join" ? "入室" : "退室"}しました`, botId);
 }
 
 /**
  * 文章をそのまま読み上げる音声（WAV）を合成する。VOICEVOX が落ちていても Bot を
  * 止めないため、失敗はここで握り潰して null を返す。
  */
-export async function synthesize(text: string): Promise<Buffer | null> {
+export async function synthesize(
+  text: string,
+  botId: string,
+): Promise<Buffer | null> {
+  const speaker = botSpeakers.get(botId) ?? speakers[0];
   try {
     // 読みと抑揚を決める audio_query の結果を、そのまま synthesis へ渡す 2 段構成
     const query = await fetch(

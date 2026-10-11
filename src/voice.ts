@@ -98,6 +98,7 @@ type QueueItem =
   | { text: string };
 
 type Session = {
+  botId: string;
   channelId: string;
   player: AudioPlayer;
   queue: QueueItem[];
@@ -161,6 +162,7 @@ export async function joinChannel(
   connection.subscribe(player);
 
   const session: Session = {
+    botId,
     channelId: channel.id,
     player,
     queue: [],
@@ -283,8 +285,8 @@ async function playNext(session: Session): Promise<void> {
 
       const wav =
         "text" in item
-          ? await synthesize(item.text)
-          : await synthesizeNotice(item.name, item.kind);
+          ? await synthesize(item.text, session.botId)
+          : await synthesizeNotice(item.name, item.kind, session.botId);
       if (pause) await pause;
       // 待つ間に全員退出していたら再生しない。購読者のいない player は
       // AutoPaused のままになり、変換中の ffmpeg が終了しなくなる
