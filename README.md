@@ -81,7 +81,7 @@ docker compose down
 | `VC_CHAT_READ_ENABLED` | `true` | `false` で VC 付属チャットを読み上げない（`/shaberu-ch` で指定したチャンネルは読む） |
 | `VC_CHAT_DELETE_SECONDS` | `30` | VC 付属チャットの発言を消すまでの秒数（`0`〜`86400`、`0` で消さない） |
 | `ANNOUNCE_DELAY_MS` | `500` | 入退室から鳴らし始めるまでの待ち（`0`〜`5000` ミリ秒、`0` で即時） |
-| `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID |
+| `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID。カンマ区切りで Bot ごとに指定できる（下記） |
 | `VOICEVOX_URL` | `http://voicevox:50021` | VOICEVOX Engine の接続先 |
 | `VOICEVOX_TIMEOUT_MS` | `10000` | 音声合成のタイムアウト（ミリ秒） |
 
@@ -94,6 +94,7 @@ DISCORD_TOKEN=1体目のトークン,2体目のトークン
 ```
 
 - 1 プロセスで全 Bot が動き、登録音・`on`/`off`・`/yomi` の読み方・`/shaberu-ch` のチャンネルは全 Bot で共通です
+- 読み上げの声は `VOICEVOX_SPEAKER` をトークンと同じ順にカンマ区切りで並べると Bot ごとに変えられます（例: `VOICEVOX_SPEAKER=14,58` で 1 体目が冥鳴ひまり、2 体目が猫使ビィ）。1 つだけ指定したときや、指定がトークンより少ないときは、足りない Bot は 1 つ目の話者で読みます
 - 誰かが通話に入ると、空いている Bot が 1 体だけ参加します。すでに Bot がいる通話に別の Bot が入ることはありません
 - メンションのコマンド（`check` や `leave` など）は、その通話にいる Bot をメンションしてください
 - スラッシュコマンドは 1 体目の Bot にだけ登録されます。どの Bot が通話にいても使えますが、1 体目がいないサーバーでは使えないので、1 体目はすべてのサーバーに招待してください

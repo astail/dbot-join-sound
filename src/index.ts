@@ -9,6 +9,7 @@ import { readChatMessage, scheduleVcChatDeletion } from "./chat.js";
 import { commands, handleInteraction } from "./commands.js";
 import { handleMessage } from "./register.js";
 import { handleVoiceStateUpdate } from "./voice.js";
+import { assignSpeaker } from "./voicevox.js";
 
 // カンマ区切りで複数指定すると、その数だけ Bot が動く。同時に別々の通話へ入れるように
 // するためで、登録音・読み方・読み上げチャンネルはすべての Bot で共通
@@ -36,7 +37,8 @@ function registerCommands(guild: Guild): void {
   });
 }
 
-function createClient(registersCommands: boolean): Client {
+function createClient(index: number): Client {
+  const registersCommands = index === 0;
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -53,6 +55,7 @@ function createClient(registersCommands: boolean): Client {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`Logged in as ${c.user.tag} (commit: ${commit})`);
+    assignSpeaker(c.user.id, index);
     if (registersCommands) c.guilds.cache.each(registerCommands);
   });
 
@@ -90,5 +93,5 @@ function createClient(registersCommands: boolean): Client {
 // スラッシュコマンドは 1 体目の Bot にだけ登録する。全員に登録すると、同じコマンドが
 // Bot の数だけ候補に並ぶ（設定は共通なので、どの Bot から実行しても結果は同じ）
 await Promise.all(
-  tokens.map((token, i) => createClient(i === 0).login(token)),
+  tokens.map((token, i) => createClient(i).login(token)),
 );
