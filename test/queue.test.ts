@@ -13,35 +13,68 @@ type Played = { inputType: StreamType };
 const played: Played[] = [];
 let idle: (() => void) | undefined;
 
-const player = {
-  state: { status: AudioPlayerStatus.Idle as AudioPlayerStatus },
-  on(event: string, handler: () => void) {
-    if (event === AudioPlayerStatus.Idle) idle = handler;
-    return player;
-  },
-  play(resource: Played) {
-    played.push(resource);
-    player.state = { status: AudioPlayerStatus.Playing };
-  },
-  stop() {},
+// 本物と同じくセッションごとに別の player を作る。Bot を複数動かすテストで、
+// 片方の Bot の破棄がもう片方の再生を止めないことを確かめるため
+type MockPlayer = {
+  state: { status: AudioPlayerStatus };
+  stopped: boolean;
+  on(event: string, handler: () => void): MockPlayer;
+  play(resource: Played): void;
+  stop(): void;
 };
+
+function createPlayer(): MockPlayer {
+  const created: MockPlayer = {
+    state: { status: AudioPlayerStatus.Idle },
+    stopped: false,
+    on(event, handler) {
+      if (event === AudioPlayerStatus.Idle) idle = handler;
+      return created;
+    },
+    play(resource) {
+      played.push(resource);
+      created.state = { status: AudioPlayerStatus.Playing };
+    },
+    stop() {
+      created.stopped = true;
+    },
+  };
+  return created;
+}
+
+// 直近に作られた player。Bot が 1 体のテストでは、そのテストのセッションの player になる
+let player = createPlayer();
+
+// 接続は本物と同じく guild と group（Bot の ID）の組で引けるようにする。group を
+// 渡し忘れると既定の group で探して見つからず、Bot が通話に残るのを検出するため
+type MockConnection = { state: { status: string }; destroyed: boolean };
+const connections = new Map<string, MockConnection>();
 
 mock.module("@discordjs/voice", {
   namedExports: {
     ...actualVoice,
-    createAudioPlayer: () => player,
+    createAudioPlayer: () => (player = createPlayer()),
     createAudioResource: (_input: unknown, options: { inputType: StreamType }) => ({
       inputType: options.inputType,
       volume: { setVolume() {} },
     }),
-    joinVoiceChannel: () => ({
-      subscribe() {},
-      on() {},
-      state: { status: "ready" },
-      destroy() {},
-    }),
+    joinVoiceChannel: (options: { guildId: string; group?: string }) => {
+      const connection = {
+        state: { status: "ready" },
+        destroyed: false,
+        subscribe() {},
+        on() {},
+        destroy() {
+          connection.destroyed = true;
+          connection.state = { status: "destroyed" };
+        },
+      };
+      connections.set(`${options.guildId}:${options.group ?? "default"}`, connection);
+      return connection;
+    },
     entersState: async () => {},
-    getVoiceConnection: () => undefined,
+    getVoiceConnection: (guildId: string, group = "default") =>
+      connections.get(`${guildId}:${group}`),
   },
 });
 
@@ -495,10 +528,18 @@ test("別の Bot がいる通話へ移されたら、二重に鳴らさないよ
   await joinSeenByBots("u-multi-4", "vc-1", ["bot-a", "bot-b"]);
   await joinSeenByBots("u-multi-5", "vc-2", ["bot-a", "bot-b"]);
 
+  const playerA = getSession("bot-a", guildId)?.player as unknown as MockPlayer;
+  const playerB = getSession("bot-b", guildId)?.player as unknown as MockPlayer;
+
   await botMoved("bot-a", "vc-1", "vc-2");
 
   assert.equal(getSession("bot-a", guildId), undefined);
   assert.equal(getSession("bot-b", guildId)?.channelId, "vc-2");
+  // 抜けるのは移された Bot の接続だけで、もう片方の接続と再生には触らない
+  assert.equal(connections.get(`${guildId}:bot-a`)?.destroyed, true);
+  assert.equal(connections.get(`${guildId}:bot-b`)?.destroyed, false);
+  assert.equal(playerA.stopped, true);
+  assert.equal(playerB.stopped, false);
 });
 
 test("参加の反映など、同じチャンネルのままの自分の状態更新では抜けない", async () => {
