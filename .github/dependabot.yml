@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # prism-media（@discordjs/voice 経由）が peerDependencies で ^0.0.8 を要求している。
+      # 対応したら外す
+      - dependency-name: opusscript
 
   - package-ecosystem: github-actions
     directory: /
