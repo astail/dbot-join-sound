@@ -116,6 +116,20 @@ test("表示名から退室案内のWAVを合成する", async () => {
   assert.ok(urls[0].includes(encodeURIComponent("アステルが退室しました")));
 });
 
+test("表示名から移動案内のWAVを合成する", async () => {
+  const urls: string[] = [];
+
+  const wav = await synthesizeWith(async (input) => {
+    urls.push(String(input));
+    return String(input).includes("/audio_query")
+      ? new Response('{"accent_phrases":[]}')
+      : new Response(Buffer.from("RIFF-fake-wav"));
+  }, "move");
+
+  assert.equal(wav?.toString(), "RIFF-fake-wav");
+  assert.ok(urls[0].includes(encodeURIComponent("アステルがチャンネルを移動しました")));
+});
+
 test("audio_queryが失敗したら合成しない", async () => {
   const urls: string[] = [];
 

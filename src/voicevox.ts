@@ -37,7 +37,13 @@ export function assignSpeaker(botId: string, index: number): void {
   botSpeakers.set(botId, speakers[index] ?? speakers[0]);
 }
 
-export type NoticeKind = "join" | "leave";
+export type NoticeKind = "join" | "leave" | "move";
+
+const noticeTexts: Record<NoticeKind, string> = {
+  join: "入室しました",
+  leave: "退室しました",
+  move: "チャンネルを移動しました",
+};
 
 /** 入退室案内の音声（WAV）を合成する。 */
 export async function synthesizeNotice(
@@ -45,7 +51,7 @@ export async function synthesizeNotice(
   kind: NoticeKind,
   botId: string,
 ): Promise<Buffer | null> {
-  return synthesize(`${name}が${kind === "join" ? "入室" : "退室"}しました`, botId);
+  return synthesize(`${name}が${noticeTexts[kind]}`, botId);
 }
 
 /**
