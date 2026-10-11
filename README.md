@@ -187,6 +187,13 @@ VOICEVOX が名前を読み違えるとき（`mame` を「めいむ」と読ん�
 
 コマンドは Bot が参加しているサーバーごとに、起動時と招待時に登録されます（反映は即時）。
 
+## 依存の更新
+
+依存・GitHub Actions・Docker イメージの更新は Dependabot が毎週 PR を作ります。次の 2 つは対象から外しているので、手で更新してください。
+
+- **opusscript は 0.0.8 に固定**: `@discordjs/voice` が使う prism-media が peerDependencies で `^0.0.8` を要求しており、0.1.x に上げると `npm ls` が invalid になる。0.1.x の変更（libopus 1.4、`setBitrate()` の追加）はこの Bot に不要で、動作も変わらないことを確認済み（#42）。prism-media が対応したら `.github/dependabot.yml` の ignore を外して上げる
+- **Node のメジャー更新**: Dependabot は LTS にならない奇数版も提案するため。新しい LTS が出たら Dockerfile と `.github/workflows/ci.yml` の `node-version` を合わせて上げる
+
 ## クレジット
 
 未登録ユーザーの読み上げには [VOICEVOX](https://voicevox.hiroshiba.jp/) を使用しています。

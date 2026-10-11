@@ -19,6 +19,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # 奇数版（LTS にならない）も提案されるため、Node のメジャー更新は LTS に合わせて手で行う
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker-compose
     directory: /
