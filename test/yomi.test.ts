@@ -12,6 +12,7 @@ import { applyYomi, readDict, writeDict } from "../src/yomi.ts";
 mock.module("../src/voice.ts", {
   namedExports: {
     getSession: () => ({ channelId: "vc-1" }),
+    hasSessionInGuild: () => true,
     enqueueText: () => {},
   },
 });

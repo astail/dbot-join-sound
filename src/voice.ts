@@ -106,17 +106,38 @@ type Session = {
   destroyed: boolean;
 };
 
-// guildId → Session（Bot が参加中の VC）
+// Bot ごとに guild 単位で持つ（Bot が参加中の VC）。トークンを複数指定すると
+// 1 プロセスで複数の Bot が動くので、キーに Bot の ID を含める
 const sessions = new Map<string, Session>();
 
-export function getSession(guildId: string): Session | undefined {
-  return sessions.get(guildId);
+function sessionKey(botId: string, guildId: string): string {
+  return `${botId}:${guildId}`;
 }
 
-export function leaveChannel(guildId: string): boolean {
-  const session = sessions.get(guildId);
+export function getSession(botId: string, guildId: string): Session | undefined {
+  return sessions.get(sessionKey(botId, guildId));
+}
+
+// どれかの Bot がそのチャンネルにいるか。同じ通話に 2 体入って二重に鳴らさないため
+export function isChannelAttended(guildId: string, channelId: string): boolean {
+  for (const [key, session] of sessions) {
+    if (key.endsWith(`:${guildId}`) && session.channelId === channelId) return true;
+  }
+  return false;
+}
+
+// どれかの Bot がこのサーバーの通話にいるか
+export function hasSessionInGuild(guildId: string): boolean {
+  for (const key of sessions.keys()) {
+    if (key.endsWith(`:${guildId}`)) return true;
+  }
+  return false;
+}
+
+export function leaveChannel(botId: string, guildId: string): boolean {
+  const session = getSession(botId, guildId);
   if (!session) return false;
-  destroySession(guildId, session);
+  destroySession(botId, guildId, session);
   return true;
 }
 
@@ -125,9 +146,12 @@ export async function joinChannel(
   initialJoiner?: { id: string; displayName: string | undefined },
 ): Promise<Session> {
   const guildId = channel.guild.id;
+  const botId = channel.client.user.id;
   const connection = joinVoiceChannel({
     channelId: channel.id,
     guildId,
+    // 同じ guild に複数の Bot が接続するので、接続を Bot ごとに分ける
+    group: botId,
     adapterCreator: channel.guild.voiceAdapterCreator,
     selfDeaf: true,
     selfMute: false,
@@ -144,7 +168,7 @@ export async function joinChannel(
     destroyed: false,
   };
   // Ready を待つ間に別チャンネルへの参加が走らないよう、先にセッションを予約する
-  sessions.set(guildId, session);
+  sessions.set(sessionKey(botId, guildId), session);
 
   player.on(AudioPlayerStatus.Idle, () => void playNext(session));
   player.on("error", (err) => {
@@ -165,7 +189,7 @@ export async function joinChannel(
         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
       ]);
     } catch {
-      destroySession(guildId, session);
+      destroySession(botId, guildId, session);
     }
   });
 
@@ -178,23 +202,23 @@ export async function joinChannel(
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
   } catch (err) {
-    destroySession(guildId, session);
+    destroySession(botId, guildId, session);
     throw err;
   }
   return session;
 }
 
-function destroySession(guildId: string, expected?: Session): void {
-  const session = sessions.get(guildId);
+function destroySession(botId: string, guildId: string, expected?: Session): void {
+  const session = getSession(botId, guildId);
   // 遅延実行される catch からの呼び出しで、後から作られた別セッションを壊さない
   if (expected && session !== expected) return;
-  sessions.delete(guildId);
+  sessions.delete(sessionKey(botId, guildId));
   if (session) {
     session.destroyed = true;
     session.queue.length = 0;
     session.player.stop(true);
   }
-  const connection = getVoiceConnection(guildId);
+  const connection = getVoiceConnection(guildId, botId);
   if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
     connection.destroy();
   }
@@ -335,20 +359,32 @@ export async function handleVoiceStateUpdate(
   newState: VoiceState,
 ): Promise<void> {
   const guildId = newState.guild.id;
+  // 複数の Bot が同じイベントを受け取るので、それぞれ自分のセッションについてだけ動く
+  const botId = newState.client.user.id;
 
   // Bot 自身: 切断されたらセッション破棄、移動させられたら追従
-  if (newState.id === newState.client.user?.id) {
-    const session = sessions.get(guildId);
+  if (newState.id === botId) {
+    const session = getSession(botId, guildId);
     if (!session) return;
     if (!newState.channelId) {
-      destroySession(guildId, session);
+      destroySession(botId, guildId, session);
+      return;
+    }
+    // 別の Bot がいる通話へ移されたら、二重に鳴らさないよう自分が抜ける。参加直後や
+    // ミュート切替でも自分のイベントは届くので、チャンネルが変わったときだけ見る
+    // （そのときは自分のセッションがまだ移動元を指すので、自分自身には当たらない）
+    if (
+      newState.channelId !== session.channelId &&
+      isChannelAttended(guildId, newState.channelId)
+    ) {
+      destroySession(botId, guildId, session);
       return;
     }
     session.channelId = newState.channelId;
     // 無人チャンネルへ移動させられた場合も「全員退出で即切断」に合わせて抜ける
     const humans =
       newState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
-    if (humans === 0) destroySession(guildId, session);
+    if (humans === 0) destroySession(botId, guildId, session);
     return;
   }
 
@@ -356,14 +392,14 @@ export async function handleVoiceStateUpdate(
   // ミュート切替・画面共有等ではチャンネルは変わらない
   if (oldState.channelId === newState.channelId) return;
 
-  const session = sessions.get(guildId);
+  const session = getSession(botId, guildId);
 
   // Bot のいるチャンネルからの退室: 人間が 0 人になったら即切断（移動先には追従しない）
   if (session && oldState.channelId === session.channelId) {
     const humans =
       oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
     if (humans === 0) {
-      destroySession(guildId, session);
+      destroySession(botId, guildId, session);
       return;
     }
     // 残っている人に向けた退室の読み上げ
@@ -376,6 +412,9 @@ export async function handleVoiceStateUpdate(
   if (!session) {
     // 未接続なら最初に誰かが入った VC に参加し、本人の入室音も鳴らす
     const channel = newState.channel;
+    // 別の Bot が先に入っていればそちらが鳴らす。参加の予約（sessions への登録）は
+    // joinChannel 内で await より前に済むため、後から同じイベントを処理した Bot はここで弾かれる
+    if (isChannelAttended(guildId, channel.id)) return;
     // ステージ・AFK チャンネル・参加権限がない/満員のチャンネルには入らない
     if (channel.type !== ChannelType.GuildVoice) return;
     if (channel.id === newState.guild.afkChannelId) return;
@@ -387,5 +426,5 @@ export async function handleVoiceStateUpdate(
   } else if (newState.channelId === session.channelId) {
     enqueue(session, newState.id, newState.member?.displayName, "join");
   }
-  // 接続中に別チャンネルへ入った人は無視
+  // 接続中に別チャンネルへ入った人は、空いている別の Bot に任せる
 }

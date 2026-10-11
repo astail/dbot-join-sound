@@ -88,13 +88,14 @@ function voiceState(id: string, channelId: string | null): VoiceState {
   return {
     id,
     guild: { id: guildId, afkChannelId: null },
-    client: { user: { id: "bot-id" } },
+    client: { user: { id: botId } },
     member: { user: { bot: false }, displayName: "アステル" },
     channelId,
     channel: channelId && {
       id: channelId,
       type: ChannelType.GuildVoice,
       joinable: true,
+      client: { user: { id: botId } },
       guild: { id: guildId, voiceAdapterCreator: () => ({}) },
       members: { filter: () => ({ size: 1 }) },
     },

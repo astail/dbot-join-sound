@@ -73,7 +73,7 @@ docker compose down
 
 | 変数 | デフォルト | 説明 |
 | --- | --- | --- |
-| `DISCORD_TOKEN` | （必須） | Bot のトークン |
+| `DISCORD_TOKEN` | （必須） | Bot のトークン。カンマ区切りで複数指定すると、その数だけ Bot が動く（下記） |
 | `JOIN_SOUND_ENABLED` | `true` | `false` で入室音の登録・再生を止める（読み上げのみ） |
 | `PLAYBACK_VOLUME` | `0.4` | 登録音の再生音量（`0.0`〜`1.0`） |
 | `VOICEVOX_VOLUME` | `0.8` | VOICEVOX 読み上げの再生音量（`0.0`〜`1.0`） |
@@ -84,6 +84,23 @@ docker compose down
 | `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID |
 | `VOICEVOX_URL` | `http://voicevox:50021` | VOICEVOX Engine の接続先 |
 | `VOICEVOX_TIMEOUT_MS` | `10000` | 音声合成のタイムアウト（ミリ秒） |
+
+### 複数の Bot で同時に別の通話へ入る
+
+1 体の Bot が入れる通話はサーバーごとに 1 つです。同じサーバーで同時に複数の通話を読み上げたいときは、Developer Portal でアプリケーションをもう 1 つ作って招待し、トークンをカンマ区切りで並べます。
+
+```
+DISCORD_TOKEN=1体目のトークン,2体目のトークン
+```
+
+- 1 プロセスで全 Bot が動き、登録音・`on`/`off`・`/yomi` の読み方・`/shaberu-ch` のチャンネルは全 Bot で共通です
+- 誰かが通話に入ると、空いている Bot が 1 体だけ参加します。すでに Bot がいる通話に別の Bot が入ることはありません
+- メンションのコマンド（`check` や `leave` など）は、その通話にいる Bot をメンションしてください
+- スラッシュコマンドは 1 体目の Bot にだけ登録されます。どの Bot が通話にいても使えますが、1 体目がいないサーバーでは使えないので、1 体目はすべてのサーバーに招待してください
+- Bot のいる通話から最後の 1 人が別の通話へ移ると、その Bot は抜け、空いている Bot が移動先に入ります（1 体のときは移動先へはついていきません）
+- 別の Bot がいる通話へ Bot を移動させると、二重に鳴らないよう移された側が抜けます。移された Bot が元いた通話は、次に誰かが入室するまで Bot なしになります（2 体の通話を入れ替えた場合も、片方が抜けて同じ状態になります）
+- 無効なトークンが 1 つでもあると、起動に失敗して全 Bot が止まります
+- `/shaberu-ch` で指定したチャンネルの発言は、Bot が参加中のすべての通話で読み上げます
 
 話者 ID の一覧は、起動後に `docker compose exec bot node -e "fetch('http://voicevox:50021/speakers').then(r=>r.json()).then(s=>console.log(s.flatMap(v=>v.styles.map(t=>t.id+' '+v.name+'('+t.name+')')).join('\n')))"` で確認できます。
 

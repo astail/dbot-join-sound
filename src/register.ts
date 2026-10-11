@@ -13,7 +13,12 @@ import {
   soundPath,
   soundsDir,
 } from "./sounds.js";
-import { getSession, joinChannel, leaveChannel } from "./voice.js";
+import {
+  getSession,
+  isChannelAttended,
+  joinChannel,
+  leaveChannel,
+} from "./voice.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,7 +67,7 @@ export async function handleMessage(message: Message): Promise<void> {
 
   // Bot が通話にいないときはチャットに何も書き込まない。結果を返せないまま登録や
   // 削除だけ起きると気づけないので、通話に呼ぶ join 以外はコマンドも実行しない
-  const session = getSession(message.guildId);
+  const session = getSession(message.client.user.id, message.guildId);
   if (!session) {
     if (!attachment && command === "join") await joinCurrentChannel(message);
     return;
@@ -255,6 +260,8 @@ async function joinCurrentChannel(message: Message<true>): Promise<void> {
   if (voiceChannel.type !== ChannelType.GuildVoice || !voiceChannel.joinable) {
     return;
   }
+  // 別の Bot がすでにいる通話に入ると、入退室が二重に鳴る
+  if (isChannelAttended(message.guildId, voiceChannel.id)) return;
 
   try {
     await joinChannel(voiceChannel);
@@ -265,5 +272,5 @@ async function joinCurrentChannel(message: Message<true>): Promise<void> {
 
 async function leaveCurrentChannel(message: Message<true>): Promise<void> {
   // 退出したことは Bot が通話から消えるのを見ればわかるので、返信しない
-  leaveChannel(message.guildId);
+  leaveChannel(message.client.user.id, message.guildId);
 }

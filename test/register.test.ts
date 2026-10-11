@@ -14,6 +14,7 @@ import { offPath, soundPath, soundsDir } from "../src/sounds.ts";
 mock.module("../src/voice.ts", {
   namedExports: {
     getSession: () => ({ channelId: "vc-1" }),
+    isChannelAttended: () => false,
     joinChannel: async () => {},
     leaveChannel: () => true,
   },

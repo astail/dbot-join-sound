@@ -13,35 +13,68 @@ type Played = { inputType: StreamType };
 const played: Played[] = [];
 let idle: (() => void) | undefined;
 
-const player = {
-  state: { status: AudioPlayerStatus.Idle as AudioPlayerStatus },
-  on(event: string, handler: () => void) {
-    if (event === AudioPlayerStatus.Idle) idle = handler;
-    return player;
-  },
-  play(resource: Played) {
-    played.push(resource);
-    player.state = { status: AudioPlayerStatus.Playing };
-  },
-  stop() {},
+// 本物と同じくセッションごとに別の player を作る。Bot を複数動かすテストで、
+// 片方の Bot の破棄がもう片方の再生を止めないことを確かめるため
+type MockPlayer = {
+  state: { status: AudioPlayerStatus };
+  stopped: boolean;
+  on(event: string, handler: () => void): MockPlayer;
+  play(resource: Played): void;
+  stop(): void;
 };
+
+function createPlayer(): MockPlayer {
+  const created: MockPlayer = {
+    state: { status: AudioPlayerStatus.Idle },
+    stopped: false,
+    on(event, handler) {
+      if (event === AudioPlayerStatus.Idle) idle = handler;
+      return created;
+    },
+    play(resource) {
+      played.push(resource);
+      created.state = { status: AudioPlayerStatus.Playing };
+    },
+    stop() {
+      created.stopped = true;
+    },
+  };
+  return created;
+}
+
+// 直近に作られた player。Bot が 1 体のテストでは、そのテストのセッションの player になる
+let player = createPlayer();
+
+// 接続は本物と同じく guild と group（Bot の ID）の組で引けるようにする。group を
+// 渡し忘れると既定の group で探して見つからず、Bot が通話に残るのを検出するため
+type MockConnection = { state: { status: string }; destroyed: boolean };
+const connections = new Map<string, MockConnection>();
 
 mock.module("@discordjs/voice", {
   namedExports: {
     ...actualVoice,
-    createAudioPlayer: () => player,
+    createAudioPlayer: () => (player = createPlayer()),
     createAudioResource: (_input: unknown, options: { inputType: StreamType }) => ({
       inputType: options.inputType,
       volume: { setVolume() {} },
     }),
-    joinVoiceChannel: () => ({
-      subscribe() {},
-      on() {},
-      state: { status: "ready" },
-      destroy() {},
-    }),
+    joinVoiceChannel: (options: { guildId: string; group?: string }) => {
+      const connection = {
+        state: { status: "ready" },
+        destroyed: false,
+        subscribe() {},
+        on() {},
+        destroy() {
+          connection.destroyed = true;
+          connection.state = { status: "destroyed" };
+        },
+      };
+      connections.set(`${options.guildId}:${options.group ?? "default"}`, connection);
+      return connection;
+    },
     entersState: async () => {},
-    getVoiceConnection: () => undefined,
+    getVoiceConnection: (guildId: string, group = "default") =>
+      connections.get(`${guildId}:${group}`),
   },
 });
 
@@ -121,17 +154,20 @@ function voiceState(
   displayName: string | undefined,
   channelId: string | null,
   remaining = 1,
+  // イベントを受け取った Bot。複数の Bot は同じイベントをそれぞれ受け取る
+  botId = "bot-id",
 ): VoiceState {
   return {
     id,
     guild: { id: guildId, afkChannelId: null },
-    client: { user: { id: "bot-id" } },
+    client: { user: { id: botId } },
     member: { user: { bot: false }, displayName },
     channelId,
     channel: channelId && {
       id: channelId,
       type: ChannelType.GuildVoice,
       joinable: true,
+      client: { user: { id: botId } },
       guild: { id: guildId, voiceAdapterCreator: () => ({}) },
       members: { filter: () => ({ size: remaining }) },
     },
@@ -428,7 +464,7 @@ test("チャットは入退室と同じキューで順番に読み上げる", as
   const registered = await registerSound("u-chat-1");
 
   await join(registered, "アステル");
-  const session = getSession(guildId);
+  const session = getSession("bot-id", guildId);
   assert.ok(session);
   enqueueText(session, "こんにちは");
   await join("u-chat-2", "ほか");
@@ -442,4 +478,74 @@ test("チャットは入退室と同じキューで順番に読み上げる", as
     "再生中の入室音に重ねない",
   );
   assert.deepEqual(synthesized, ["chat:こんにちは", "join:ほか"]);
+});
+
+// 全 Bot が同じ入室イベントを受け取る
+async function joinSeenByBots(
+  id: string,
+  channelId: string,
+  botIds: string[],
+): Promise<void> {
+  for (const botId of botIds) {
+    await handleVoiceStateUpdate(
+      voiceState(id, "アステル", null, 1, botId),
+      voiceState(id, "アステル", channelId, 1, botId),
+    );
+  }
+  await settle();
+}
+
+test("複数の Bot が同じ入室を受け取っても、参加するのは 1 体だけで読み上げも 1 回", async () => {
+  await joinSeenByBots("u-multi-1", "vc-1", ["bot-a", "bot-b"]);
+
+  assert.equal(getSession("bot-a", guildId)?.channelId, "vc-1");
+  assert.equal(getSession("bot-b", guildId), undefined);
+  assert.deepEqual(synthesized, ["join:アステル"]);
+});
+
+test("Bot が通話中でも、別の通話には空いている Bot が参加する", async () => {
+  await joinSeenByBots("u-multi-2", "vc-1", ["bot-a", "bot-b"]);
+  await joinSeenByBots("u-multi-3", "vc-2", ["bot-a", "bot-b"]);
+
+  assert.equal(getSession("bot-a", guildId)?.channelId, "vc-1");
+  assert.equal(getSession("bot-b", guildId)?.channelId, "vc-2");
+});
+
+// Bot 自身の状態更新（移動させられた、参加が反映された等）
+async function botMoved(
+  botId: string,
+  from: string | null,
+  to: string | null,
+): Promise<void> {
+  await handleVoiceStateUpdate(
+    voiceState(botId, undefined, from, 1, botId),
+    voiceState(botId, undefined, to, 1, botId),
+  );
+  await settle();
+}
+
+test("別の Bot がいる通話へ移されたら、二重に鳴らさないよう自分が抜ける", async () => {
+  await joinSeenByBots("u-multi-4", "vc-1", ["bot-a", "bot-b"]);
+  await joinSeenByBots("u-multi-5", "vc-2", ["bot-a", "bot-b"]);
+
+  const playerA = getSession("bot-a", guildId)?.player as unknown as MockPlayer;
+  const playerB = getSession("bot-b", guildId)?.player as unknown as MockPlayer;
+
+  await botMoved("bot-a", "vc-1", "vc-2");
+
+  assert.equal(getSession("bot-a", guildId), undefined);
+  assert.equal(getSession("bot-b", guildId)?.channelId, "vc-2");
+  // 抜けるのは移された Bot の接続だけで、もう片方の接続と再生には触らない
+  assert.equal(connections.get(`${guildId}:bot-a`)?.destroyed, true);
+  assert.equal(connections.get(`${guildId}:bot-b`)?.destroyed, false);
+  assert.equal(playerA.stopped, true);
+  assert.equal(playerB.stopped, false);
+});
+
+test("参加の反映など、同じチャンネルのままの自分の状態更新では抜けない", async () => {
+  await joinSeenByBots("u-multi-6", "vc-1", ["bot-a", "bot-b"]);
+
+  await botMoved("bot-a", null, "vc-1");
+
+  assert.equal(getSession("bot-a", guildId)?.channelId, "vc-1");
 });
