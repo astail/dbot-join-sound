@@ -24,6 +24,12 @@ updates:
       - dependency-name: node
         update-types: ["version-update:semver-major"]
 
+  # 韓国語の読み上げ用の Piper イメージ
+  - package-ecosystem: docker
+    directory: /piper
+    schedule:
+      interval: weekly
+
   - package-ecosystem: docker-compose
     directory: /
     schedule:

@@ -1,6 +1,6 @@
 # dbot-join-sound
 
-ボイスチャンネル（VC）の入室音 Bot。誰かが VC に入ると、その人が登録した音声（冒頭8秒まで）を再生します。入室音を登録していない人は、VOICEVOX の音声合成で「〇〇が入室しました」と読み上げます。退室したときは全員共通で「〇〇が退室しました」（別の VC へ移ったときは「〇〇がチャンネルを移動しました」）と読み上げます。
+ボイスチャンネル（VC）の入室音 Bot。誰かが VC に入ると、その人が登録した音声（冒頭8秒まで）を再生します。入室音を登録していない人は、VOICEVOX の音声合成で「〇〇が入室しました」と読み上げます。退室したときは全員共通で「〇〇が退室しました」（別の VC へ移ったときは「〇〇がチャンネルを移動しました」）と読み上げます。韓国語（ハングル）の部分は Piper の韓国語の声で読み上げます。
 
 ## 機能
 
@@ -11,6 +11,7 @@
 - **未登録ユーザーの読み上げ**: 入室音がない人は、表示名で「〇〇が入室しました」と読み上げ（VOICEVOX）
 - **退室の読み上げ**: 誰かが VC から抜けると「〇〇が退室しました」、別の VC へ移ると「〇〇がチャンネルを移動しました」と読み上げ。全員共通で、退室音は登録できない
 - **チャットの読み上げ**: Bot が参加中の VC に付いているテキストチャットの発言を、本文だけ VOICEVOX で読み上げる（`VC_CHAT_READ_ENABLED=false` で無効）。`/shaberu-ch add` を実行したチャンネルの発言も読み上げる（Bot が通話にいる間だけ）。画像や動画は「画像がアップロードされました」のように知らせる
+- **韓国語の読み上げ**: チャットや表示名のハングルの部分を、Piper の韓国語の声で読み上げる。「今日は 안녕하세요 でした」のように日本語と混ざっていても、日本語は VOICEVOX、韓国語は Piper で合成して 1 つの音声につないで流す。韓国語の声は 1 種類で、Bot ごとには変えられない
 - **VC 付属チャットの自動削除**: Bot が参加中の VC に付いているテキストチャットの発言を、Bot の返信も含めて 30 秒後に削除。Bot のいない VC と普通のテキストチャンネルは消さない（`VC_CHAT_DELETE_SECONDS` で変更、`0` で無効）
 - **読み方の登録**: `/yomi set` で「読み間違えられる単語 → 実際の読み方」を登録。表示名に部分一致した箇所を置き換えて読み上げる（`mame` → `まめ` を登録すれば `mamesan` も「まめさん」寄りに読まれる）
 - **登録なしモード**: `JOIN_SOUND_ENABLED=false` で起動すると入室音の登録を受け付けず、登録済みの音声も鳴らさない（読み上げのみ）。音声は消えないので、`true` に戻せばまた鳴る
@@ -57,7 +58,7 @@ docker compose logs -f bot
 docker compose down
 ```
 
-`docker compose up` すると、Bot と音声合成用の VOICEVOX Engine が起動します。VOICEVOX Engine のイメージは約 2GB あるため、初回の取得には時間がかかります。
+`docker compose up` すると、Bot と音声合成用の VOICEVOX Engine が起動します。VOICEVOX Engine のイメージは約 2GB あるため、初回の取得には時間がかかります。韓国語の読み上げ用に Piper（約 600MB）のイメージもビルドします。
 
 登録した音声は Docker の `sounds` ボリュームに保存され、コンテナを作り直しても保持されます。`docker compose down -v` を実行すると登録音声も削除されるため注意してください。
 
@@ -83,7 +84,8 @@ docker compose down
 | `ANNOUNCE_DELAY_MS` | `500` | 入退室から鳴らし始めるまでの待ち（`0`〜`5000` ミリ秒、`0` で即時） |
 | `VOICEVOX_SPEAKER` | `14` | 読み上げの話者 ID。カンマ区切りで Bot ごとに指定できる（下記） |
 | `VOICEVOX_URL` | `http://voicevox:50021` | VOICEVOX Engine の接続先 |
-| `VOICEVOX_TIMEOUT_MS` | `10000` | 音声合成のタイムアウト（ミリ秒） |
+| `VOICEVOX_TIMEOUT_MS` | `10000` | 音声合成のタイムアウト（ミリ秒）。韓国語の Piper にも同じ値を使う |
+| `PIPER_URL` | `http://piper:5000` | 韓国語の読み上げに使う Piper の接続先 |
 
 ### 複数の Bot で同時に別の通話へ入る
 
@@ -105,7 +107,7 @@ DISCORD_TOKEN=1体目のトークン,2体目のトークン
 
 話者 ID の一覧は、起動後に `docker compose exec bot node -e "fetch('http://voicevox:50021/speakers').then(r=>r.json()).then(s=>console.log(s.flatMap(v=>v.styles.map(t=>t.id+' '+v.name+'('+t.name+')')).join('\n')))"` で確認できます。
 
-VOICEVOX Engine が停止していても Bot は動き続け、読み上げだけがスキップされます（登録済みの入室音は再生されます）。
+VOICEVOX Engine が停止していても Bot は動き続け、読み上げだけがスキップされます（登録済みの入室音は再生されます）。Piper が停止しているときは韓国語の部分だけを飛ばし、日本語の部分は読み上げます。
 
 ### 3. ローカルで起動
 
@@ -202,3 +204,5 @@ VOICEVOX が名前を読み違えるとき（`mame` を「めいむ」と読ん�
 VOICEVOX の[利用規約](https://voicevox.hiroshiba.jp/term/)により、生成した音声を利用する際は VOICEVOX を利用したことがわかるクレジット表記が必要です。加えて、話者ごとに個別の規約があります。`VOICEVOX_SPEAKER` で変更する場合は、その音声ライブラリの規約も確認してください。
 
 デフォルトの話者は VOICEVOX:冥鳴ひまり（話者 ID 14）です。[冥鳴ひまりの利用規約](https://meimeihimari.wixsite.com/himari/terms-of-use)も確認してください。
+
+韓国語の読み上げには [Piper](https://github.com/OHF-Voice/piper1-gpl)（GPL-3.0）と、その韓国語の声 [ko_KR-kss-medium](https://huggingface.co/rhasspy/piper-voices/tree/main/ko/ko_KR/kss/medium) を使用しています。この声は [KSS Dataset](https://www.kaggle.com/datasets/bryanpark/korean-single-speaker-speech-dataset)（Kyubyong Park、[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)）で学習されているため、営利目的では使用できません。
