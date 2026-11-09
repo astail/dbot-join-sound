@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     depends_on:
       - voicevox
+      - piper
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN must be set in .env}
       JOIN_SOUND_ENABLED: ${JOIN_SOUND_ENABLED:-true}
@@ -20,12 +21,19 @@ services:
       VOICEVOX_URL: ${VOICEVOX_URL:-http://voicevox:50021}
       VOICEVOX_SPEAKER: ${VOICEVOX_SPEAKER:-14}
       VOICEVOX_TIMEOUT_MS: ${VOICEVOX_TIMEOUT_MS:-10000}
+      PIPER_URL: ${PIPER_URL:-http://piper:5000}
     volumes:
       - sounds:/app/sounds
 
   # 未登録ユーザーの入室読み上げ用。ポートは公開せず bot からのみ参照する
   voicevox:
     image: voicevox/voicevox_engine:cpu-0.25.2@sha256:eb8c7f46a7d01217d1ff2b6f018261faedeceded3cc756b4fbbf371791ad6c90
+    init: true
+    restart: unless-stopped
+
+  # 韓国語の読み上げ用。VOICEVOX と同じくポートは公開しない
+  piper:
+    build: ./piper
     init: true
     restart: unless-stopped
 
