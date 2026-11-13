@@ -81,15 +81,23 @@ async function cachedNotice(
   speaker: number,
 ): Promise<Buffer | null> {
   const text = `${name}が${noticeTexts[kind]}`;
-  const key = createHash("sha256").update(`${speaker}\n${text}`).digest("hex");
-  const path = join(noticeCacheDir, `${key}.wav`);
+  return withCache(`${speaker}\n${text}`, () => synthesizeParts(text, speaker));
+}
+
+// key が同じなら保存済みの WAV を返し、なければ合成して保存する
+async function withCache(
+  key: string,
+  synthesizeOnMiss: () => Promise<{ wav: Buffer | null; complete: boolean }>,
+): Promise<Buffer | null> {
+  const hash = createHash("sha256").update(key).digest("hex");
+  const path = join(noticeCacheDir, `${hash}.wav`);
   try {
     return await readFile(path);
   } catch {
     // 未保存（または読めない）なら合成し直す
   }
 
-  const { wav, complete } = await synthesizeParts(text, speaker);
+  const { wav, complete } = await synthesizeOnMiss();
   // VOICEVOX か Piper が落ちて一部だけ読めた音声は残さず、次回また合成する
   if (wav && complete) await saveNotice(path, wav);
   return wav;
@@ -112,6 +120,48 @@ function prepareNotices(name: string): void {
         );
     }
   }
+}
+
+// チャットの読み上げに決まって出てくる言い回し。毎回同じ音になるので、入退室の案内と
+// 同じく保存して使い回す。長いものを先に並べ、短いものが長いものの途中に当たらないようにする
+export const FIXED_PHRASES = [
+  "画像と動画がアップロードされました",
+  "画像がアップロードされました",
+  "動画がアップロードされました",
+  "伏せ字",
+  "以下略",
+  "URL",
+];
+
+// 言い回しに正規表現の記号は含まないので、そのまま並べる
+const fixedPhrasePattern = new RegExp(`(${FIXED_PHRASES.join("|")})`);
+
+// 前後の文とつなぐので、サンプリングレートを日韓混在のときと同じにそろえて保存する
+function cachedPhrase(phrase: string, speaker: number): Promise<Buffer | null> {
+  return withCache(`${speaker}\n${MIXED_SAMPLE_RATE}\n${phrase}`, () =>
+    synthesizeParts(phrase, speaker, MIXED_SAMPLE_RATE),
+  );
+}
+
+/** 決まった言い回しを、その Bot の声で裏で用意しておく。起動時に呼ぶ。 */
+export function prepareFixedPhrases(botId: string): void {
+  const speaker = speakerOf(botId);
+  for (const phrase of FIXED_PHRASES) {
+    preparing = preparing
+      .then(() => cachedPhrase(phrase, speaker))
+      .then(
+        () => {},
+        (err) => console.error("failed to prepare phrase:", err),
+      );
+  }
+}
+
+// 決まった言い回しとそれ以外に分ける。間に挟まった読点や空白だけの部分は読む物がないので捨てる
+function splitFixedPhrases(text: string): { text: string; fixed: boolean }[] {
+  return text
+    .split(fixedPhrasePattern)
+    .map((part, i) => ({ text: part.trim(), fixed: i % 2 === 1 }))
+    .filter((part) => part.fixed || /[^\s、。,.!?！？]/u.test(part.text));
 }
 
 /** 先回りの合成がすべて終わるまで待つ（テスト用）。 */
@@ -162,20 +212,44 @@ export async function synthesize(
   text: string,
   botId: string,
 ): Promise<Buffer | null> {
-  return (await synthesizeParts(text, speakerOf(botId))).wav;
+  const speaker = speakerOf(botId);
+  const parts = splitFixedPhrases(text);
+  if (!parts.some((part) => part.fixed)) {
+    return (await synthesizeParts(text, speaker)).wav;
+  }
+
+  // 決まった言い回しは保存済みの音声を使い、残りだけ合成してつなぐ
+  const wavs = await Promise.all(
+    parts.map(async (part) =>
+      part.fixed
+        ? cachedPhrase(part.text, speaker)
+        : (await synthesizeParts(part.text, speaker, MIXED_SAMPLE_RATE)).wav,
+    ),
+  );
+  const synthesized = wavs.filter((wav) => wav !== null);
+  if (synthesized.length === 0) return null;
+  if (synthesized.length === 1) return synthesized[0];
+  try {
+    return concatWav(synthesized);
+  } catch (err) {
+    console.error("failed to concat wav:", err);
+    return null;
+  }
 }
 
-// complete は、どの部分も合成できたか（一部を飛ばしていないか）
+// complete は、どの部分も合成できたか（一部を飛ばしていないか）。sampleRate を渡すと、
+// ほかの WAV とつなげるよう日本語だけの文もそのサンプリングレートで合成する
 async function synthesizeParts(
   text: string,
   speaker: number,
+  sampleRate?: number,
 ): Promise<{ wav: Buffer | null; complete: boolean }> {
   const segments = splitKorean(text);
   if (segments.length === 1) {
     const [segment] = segments;
     const wav = segment.korean
       ? await synthesizeKoreanAtJapaneseVolume(segment.text)
-      : await synthesizeJapanese(segment.text, speaker);
+      : await synthesizeJapanese(segment.text, speaker, sampleRate);
     return { wav, complete: wav !== null };
   }
 

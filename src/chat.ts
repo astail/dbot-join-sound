@@ -7,8 +7,9 @@ import { soundsDir } from "./sounds.js";
 import { enqueueText, getSession } from "./voice.js";
 import { applyYomi } from "./yomi.js";
 
-// 長文を最後まで読むと入退室の音がその分待たされるので、ここで打ち切る
-export const MAX_SPEECH_LENGTH = 100;
+// 長文を最後まで読むと入退室の音がその分待たされるので、ここで打ち切る。Raspberry Pi 4
+// では 12 字の合成でも 5 秒ほどかかり、長いほど読み上げが遅れる
+export const MAX_SPEECH_LENGTH = 10;
 
 const DEFAULT_VC_CHAT_DELETE_SECONDS = 30;
 // setTimeout の上限（約24.8日）より十分短く、分と秒の取り違えのような
@@ -81,8 +82,14 @@ export function toSpeechText(content: string): string {
     // 伏せ字を読み上げるとネタバレになる
     .replace(/\|\|[\s\S]*?\|\|/g, "伏せ字")
     .replace(/https?:\/\/\S+/g, "URL")
+    // メンション（人・ロール・チャンネル・全員）は読まない
+    .replace(/<@[!&]?\d+>|<#\d+>|@(?:everyone|here)/g, "")
+    // スラッシュコマンドのメンション </name:id> はコマンド名だけ読む
+    .replace(/<\/([^:>]+):\d+>/g, "/$1")
     // カスタム絵文字は <:name:id> の形で、名前も読み物として意味をなさないことが多い
     .replace(/<a?:\w+:\d+>/g, "")
+    // 普通の絵文字も読まない。肌の色・国旗・ZWJ でつないだ絵文字・異体字セレクタも消す
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
   return text.length > MAX_SPEECH_LENGTH
@@ -130,15 +137,16 @@ export function readChatMessage(
   );
   if (mentionsBot) return;
 
-  // cleanContent はメンションを <@id> ではなく @表示名 に直したもの
+  // メンションやカスタム絵文字を <@id> などの元の形のまま消せるよう、cleanContent ではなく
+  // content を使う。読み方は打ち切る前に当てる（名前が途中で切れると読み方が当たらない）
   const text = [
-    toSpeechText(message.cleanContent),
+    toSpeechText(applyYomi(message.content)),
     toAttachmentNotice([...message.attachments.values()]),
   ]
     .filter((part) => part !== "")
     .join("、");
-  if (text === "") return; // 絵文字だけ・画像や動画以外の添付だけの発言
-  enqueueText(session, applyYomi(text));
+  if (text === "") return; // 絵文字だけ・メンションだけ・画像や動画以外の添付だけの発言
+  enqueueText(session, text);
 }
 
 /**

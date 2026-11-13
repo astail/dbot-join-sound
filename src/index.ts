@@ -9,7 +9,7 @@ import { readChatMessage, scheduleVcChatDeletion } from "./chat.js";
 import { commands, handleInteraction } from "./commands.js";
 import { handleMessage } from "./register.js";
 import { handleVoiceStateUpdate } from "./voice.js";
-import { assignSpeaker } from "./voicevox.js";
+import { assignSpeaker, prepareFixedPhrases } from "./voicevox.js";
 
 // カンマ区切りで複数指定すると、その数だけ Bot が動く。同時に別々の通話へ入れるように
 // するためで、登録音・読み方・読み上げチャンネルはすべての Bot で共通
@@ -56,6 +56,7 @@ function createClient(index: number): Client {
   client.once(Events.ClientReady, (c) => {
     console.log(`Logged in as ${c.user.tag} (commit: ${commit})`);
     assignSpeaker(c.user.id, index);
+    prepareFixedPhrases(c.user.id);
     if (registersCommands) c.guilds.cache.each(registerCommands);
   });
 

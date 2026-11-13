@@ -17,7 +17,9 @@ process.env.VOICEVOX_SPEAKER = "14,58";
 const {
   assignSpeaker,
   concatWav,
+  FIXED_PHRASES,
   noticesPrepared,
+  prepareFixedPhrases,
   resolveSpeakers,
   resolveTimeoutMs,
   scaleWav,
@@ -408,4 +410,76 @@ test("チャットの読み上げは保存しない", async () => {
     globalThis.fetch = originalFetch;
   }
   assert.deepEqual(readdirSync(soundsDir), []);
+});
+
+// 文ごとに違うサンプル値の WAV を返す（どの部分がどの順でつながったか見分けるため）。
+// audio_query の結果に文を入れておき、synthesis でそれを見て返す
+const sampleOf: Record<string, number> = { 見て: 1, URL: 2, 画像がアップロードされました: 3 };
+function phraseFetch(queries: string[]): typeof globalThis.fetch {
+  return async (input, init) => {
+    const url = String(input);
+    if (url.includes("/audio_query")) {
+      const text = decodeURIComponent(url.match(/text=([^&]*)/)![1]);
+      queries.push(text);
+      return new Response(JSON.stringify({ text }));
+    }
+    const { text, outputSamplingRate } = JSON.parse(String(init?.body));
+    return new Response(makeWav(outputSamplingRate ?? 24000, [sampleOf[text] ?? 9]));
+  };
+}
+
+async function withFetch<T>(fetchStub: typeof globalThis.fetch, run: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fetchStub;
+  try {
+    return await run();
+  } finally {
+    await noticesPrepared();
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("決まった言い回しだけのチャットは2回目から合成しない", async () => {
+  const queries: string[] = [];
+  const first = await withFetch(phraseFetch(queries), () => synthesize("URL", "bot-1"));
+  // 前後とつなぐときに合わせて、日韓混在と同じサンプリングレートで保存する
+  assert.deepEqual(first, makeWav(22050, [2]));
+  assert.deepEqual(queries, ["URL"]);
+
+  const again: string[] = [];
+  assert.deepEqual(await withFetch(phraseFetch(again), () => synthesize("URL", "bot-1")), first);
+  assert.deepEqual(again, []);
+});
+
+test("決まった言い回しは保存済みの音声を使い、残りだけ合成してつなぐ", async () => {
+  await withFetch(phraseFetch([]), () => synthesize("URL", "bot-1"));
+
+  const queries: string[] = [];
+  const wav = await withFetch(phraseFetch(queries), () => synthesize("見て URL", "bot-1"));
+  assert.deepEqual(wav, makeWav(22050, [1, 2]));
+  assert.deepEqual(queries, ["見て"]);
+});
+
+test("起動時に決まった言い回しをそのBotの声で用意しておく", async () => {
+  assignSpeaker("bot-b", 1);
+  const queries: string[] = [];
+  await withFetch(phraseFetch(queries), async () => prepareFixedPhrases("bot-b"));
+  assert.deepEqual(queries.sort(), [...FIXED_PHRASES].sort());
+  assert.equal(readdirSync(noticeCacheDir).length, FIXED_PHRASES.length);
+
+  // 読点でつながった言い回しどうしも、もう合成しない
+  const later: string[] = [];
+  const wav = await withFetch(phraseFetch(later), () =>
+    synthesize("URL、画像がアップロードされました", "bot-b"),
+  );
+  assert.deepEqual(wav, makeWav(22050, [2, 3]));
+  assert.deepEqual(later, []);
+});
+
+test("決まった言い回しを含まないチャットは従来どおり1回で合成し、保存しない", async () => {
+  const queries: string[] = [];
+  const wav = await withFetch(phraseFetch(queries), () => synthesize("見て", "bot-1"));
+  assert.deepEqual(wav, makeWav(24000, [1]));
+  assert.deepEqual(queries, ["見て"]);
+  assert.equal(existsSync(noticeCacheDir), false);
 });

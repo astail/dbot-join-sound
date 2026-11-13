@@ -78,7 +78,6 @@ function chatMessage(
     channelId,
     attachments: new Map(attachments.map((a, i) => [String(i), a])),
     content,
-    cleanContent: content,
     client: { user: { id: botId } },
     // 本文中でメンションされたユーザー。Bot かどうかだけ見る
     mentions: {
@@ -119,6 +118,42 @@ test("URLは「URL」と読む", () => {
 
 test("伏せ字の中身は読まない", () => {
   assert.equal(toSpeechText("犯人は||ヤス||だった"), "犯人は伏せ字だった");
+});
+
+test("メンションは読まない", () => {
+  assert.equal(toSpeechText("<@3333333333> おはよう"), "おはよう");
+  assert.equal(toSpeechText("<@!3333333333>と<@&4444444444>"), "と");
+  assert.equal(toSpeechText("<#5555555555> 見て"), "見て");
+  assert.equal(toSpeechText("@everyone 集合 @here"), "集合");
+  assert.equal(toSpeechText("<@3333333333>"), "");
+});
+
+test("スラッシュコマンドのメンションはコマンド名だけ読む", () => {
+  assert.equal(toSpeechText("</yomi add:123456789>"), "/yomi add");
+});
+
+test("メンションだけの発言は読み上げない", () => {
+  readChatMessage(chatMessage("vc-1", "<@3333333333>"));
+  assert.deepEqual(enqueued, []);
+});
+
+test("読み方は打ち切る前に当てる", () => {
+  // 「mame」を「まめ」と読む辞書（上のモック）。元の文は上限を超えるが、読み方を当てると収まる。
+  // 先に打ち切ると「mame」が途中で切れて読み方が当たらない
+  readChatMessage(chatMessage("vc-1", `${"あ".repeat(MAX_SPEECH_LENGTH - 2)}mame`));
+  assert.deepEqual(enqueued, [`${"あ".repeat(MAX_SPEECH_LENGTH - 2)}まめ`]);
+});
+
+test("絵文字は読まない", () => {
+  assert.equal(toSpeechText("おはよう😀"), "おはよう");
+  assert.equal(toSpeechText("👍🏻 了解"), "了解");
+  assert.equal(toSpeechText("👨‍👩‍👧 家族 🇯🇵"), "家族");
+  assert.equal(toSpeechText("❤️"), "");
+});
+
+test("絵文字だけの発言は読み上げない", () => {
+  readChatMessage(chatMessage("vc-1", "🎉🎉<:party:123456789>"));
+  assert.deepEqual(enqueued, []);
 });
 
 test("カスタム絵文字は読まない", () => {
@@ -225,7 +260,8 @@ test("別のBotへのコマンドは読まず、人へのメンションは読�
   readChatMessage(chatMessage("vc-1", "<@2222222222> join"));
   readChatMessage(chatMessage("vc-1", "<@3333333333> こんにちは"));
 
-  assert.deepEqual(enqueued, ["<@3333333333> こんにちは"]);
+  // 人へのメンションの発言は読むが、メンションそのものは読まない
+  assert.deepEqual(enqueued, ["こんにちは"]);
 });
 
 test("VC付属チャットの読み上げを止めても指定チャンネルは読む", async () => {
@@ -451,4 +487,20 @@ test.describe("VC付属チャットの自動削除", () => {
 
     assert.deepEqual(errors, []);
   });
+});
+
+test("読み上げ用に置き換える決まった言い回しは、すべて保存の対象になっている", async () => {
+  const { FIXED_PHRASES } = await import("../src/voicevox.ts");
+  const outputs = [
+    toSpeechText("||ネタバレ||"),
+    toSpeechText("https://example.com"),
+    toSpeechText("あ".repeat(MAX_SPEECH_LENGTH + 1)).split(" ").at(-1)!,
+    toAttachmentNotice([{ contentType: "image/png", name: "a.png" }]),
+    toAttachmentNotice([{ contentType: "video/mp4", name: "a.mp4" }]),
+    toAttachmentNotice([
+      { contentType: "image/png", name: "a.png" },
+      { contentType: "video/mp4", name: "a.mp4" },
+    ]),
+  ];
+  assert.deepEqual(outputs.sort(), [...FIXED_PHRASES].sort());
 });
