@@ -78,7 +78,6 @@ function chatMessage(
     channelId,
     attachments: new Map(attachments.map((a, i) => [String(i), a])),
     content,
-    cleanContent: content,
     client: { user: { id: botId } },
     // 本文中でメンションされたユーザー。Bot かどうかだけ見る
     mentions: {
@@ -119,6 +118,30 @@ test("URLは「URL」と読む", () => {
 
 test("伏せ字の中身は読まない", () => {
   assert.equal(toSpeechText("犯人は||ヤス||だった"), "犯人は伏せ字だった");
+});
+
+test("メンションは読まない", () => {
+  assert.equal(toSpeechText("<@3333333333> おはよう"), "おはよう");
+  assert.equal(toSpeechText("<@!3333333333>と<@&4444444444>"), "と");
+  assert.equal(toSpeechText("<#5555555555> 見て"), "見て");
+  assert.equal(toSpeechText("@everyone 集合 @here"), "集合");
+  assert.equal(toSpeechText("<@3333333333>"), "");
+});
+
+test("スラッシュコマンドのメンションはコマンド名だけ読む", () => {
+  assert.equal(toSpeechText("</yomi add:123456789>"), "/yomi add");
+});
+
+test("メンションだけの発言は読み上げない", () => {
+  readChatMessage(chatMessage("vc-1", "<@3333333333>"));
+  assert.deepEqual(enqueued, []);
+});
+
+test("読み方は打ち切る前に当てる", () => {
+  // 「mame」を「まめ」と読む辞書（上のモック）。元の文は上限を超えるが、読み方を当てると収まる。
+  // 先に打ち切ると「mame」が途中で切れて読み方が当たらない
+  readChatMessage(chatMessage("vc-1", `${"あ".repeat(MAX_SPEECH_LENGTH - 2)}mame`));
+  assert.deepEqual(enqueued, [`${"あ".repeat(MAX_SPEECH_LENGTH - 2)}まめ`]);
 });
 
 test("カスタム絵文字は読まない", () => {
@@ -225,9 +248,8 @@ test("別のBotへのコマンドは読まず、人へのメンションは読�
   readChatMessage(chatMessage("vc-1", "<@2222222222> join"));
   readChatMessage(chatMessage("vc-1", "<@3333333333> こんにちは"));
 
-  // 人へのメンションの発言だけ読む（本文は MAX_SPEECH_LENGTH で打ち切られる）
-  assert.equal(enqueued.length, 1);
-  assert.ok(enqueued[0].startsWith("<@3333"));
+  // 人へのメンションの発言は読むが、メンションそのものは読まない
+  assert.deepEqual(enqueued, ["こんにちは"]);
 });
 
 test("VC付属チャットの読み上げを止めても指定チャンネルは読む", async () => {

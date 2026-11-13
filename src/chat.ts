@@ -82,6 +82,10 @@ export function toSpeechText(content: string): string {
     // 伏せ字を読み上げるとネタバレになる
     .replace(/\|\|[\s\S]*?\|\|/g, "伏せ字")
     .replace(/https?:\/\/\S+/g, "URL")
+    // メンション（人・ロール・チャンネル・全員）は読まない
+    .replace(/<@[!&]?\d+>|<#\d+>|@(?:everyone|here)/g, "")
+    // スラッシュコマンドのメンション </name:id> はコマンド名だけ読む
+    .replace(/<\/([^:>]+):\d+>/g, "/$1")
     // カスタム絵文字は <:name:id> の形で、名前も読み物として意味をなさないことが多い
     .replace(/<a?:\w+:\d+>/g, "")
     .replace(/\s+/g, " ")
@@ -131,15 +135,16 @@ export function readChatMessage(
   );
   if (mentionsBot) return;
 
-  // cleanContent はメンションを <@id> ではなく @表示名 に直したもの
+  // メンションやカスタム絵文字を <@id> などの元の形のまま消せるよう、cleanContent ではなく
+  // content を使う。読み方は打ち切る前に当てる（名前が途中で切れると読み方が当たらない）
   const text = [
-    toSpeechText(message.cleanContent),
+    toSpeechText(applyYomi(message.content)),
     toAttachmentNotice([...message.attachments.values()]),
   ]
     .filter((part) => part !== "")
     .join("、");
-  if (text === "") return; // 絵文字だけ・画像や動画以外の添付だけの発言
-  enqueueText(session, applyYomi(text));
+  if (text === "") return; // 絵文字だけ・メンションだけ・画像や動画以外の添付だけの発言
+  enqueueText(session, text);
 }
 
 /**
