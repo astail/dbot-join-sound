@@ -61,14 +61,27 @@ const noticeTexts: Record<NoticeKind, string> = {
 // 名前を含む）が変われば別のファイルになるので、古い読みが残ることはない
 const noticeCacheDir = join(soundsDir, "notice-cache");
 
-/** 入退室案内の音声（WAV）を合成する。同じ話者・同じ文は 2 回目から保存済みの WAV を返す。 */
+/**
+ * 入退室案内の音声（WAV）を合成する。同じ話者・同じ文は 2 回目から保存済みの WAV を返す。
+ * 返したあと、同じ人の入室・退室・移動の案内を、起動中の全 Bot の声で裏で用意しておく。
+ */
 export async function synthesizeNotice(
   name: string,
   kind: NoticeKind,
   botId: string,
 ): Promise<Buffer | null> {
+  const wav = await cachedNotice(name, kind, speakerOf(botId));
+  prepareNotices(name);
+  return wav;
+}
+
+async function cachedNotice(
+  name: string,
+  kind: NoticeKind,
+  speaker: number,
+): Promise<Buffer | null> {
   const text = `${name}が${noticeTexts[kind]}`;
-  const key = createHash("sha256").update(`${speakerOf(botId)}\n${text}`).digest("hex");
+  const key = createHash("sha256").update(`${speaker}\n${text}`).digest("hex");
   const path = join(noticeCacheDir, `${key}.wav`);
   try {
     return await readFile(path);
@@ -76,10 +89,37 @@ export async function synthesizeNotice(
     // 未保存（または読めない）なら合成し直す
   }
 
-  const { wav, complete } = await synthesizeParts(text, botId);
+  const { wav, complete } = await synthesizeParts(text, speaker);
   // VOICEVOX か Piper が落ちて一部だけ読めた音声は残さず、次回また合成する
   if (wav && complete) await saveNotice(path, wav);
   return wav;
+}
+
+// 先回りの合成は再生する案内の合成と CPU を取り合うので、まとめて走らせず 1 件ずつ順に進める
+let preparing: Promise<void> = Promise.resolve();
+
+// 入室した人が抜けるときや移動するとき、別の Bot が同じ人を読み上げるときに合成を
+// 待たずに済むよう、全種類を起動中の全 Bot の声で保存しておく。保存済みのものは
+// 読み込むだけで合成しない
+function prepareNotices(name: string): void {
+  for (const kind of Object.keys(noticeTexts) as NoticeKind[]) {
+    for (const speaker of new Set(botSpeakers.values())) {
+      preparing = preparing
+        .then(() => cachedNotice(name, kind, speaker))
+        .then(
+          () => {},
+          (err) => console.error("failed to prepare notice:", err),
+        );
+    }
+  }
+}
+
+/** 先回りの合成がすべて終わるまで待つ（テスト用）。 */
+export async function noticesPrepared(): Promise<void> {
+  for (let current = preparing; ; current = preparing) {
+    await current;
+    if (current === preparing) return;
+  }
 }
 
 // 書きかけのファイルを読まないよう、別名で書いてから置き換える
@@ -122,20 +162,20 @@ export async function synthesize(
   text: string,
   botId: string,
 ): Promise<Buffer | null> {
-  return (await synthesizeParts(text, botId)).wav;
+  return (await synthesizeParts(text, speakerOf(botId))).wav;
 }
 
 // complete は、どの部分も合成できたか（一部を飛ばしていないか）
 async function synthesizeParts(
   text: string,
-  botId: string,
+  speaker: number,
 ): Promise<{ wav: Buffer | null; complete: boolean }> {
   const segments = splitKorean(text);
   if (segments.length === 1) {
     const [segment] = segments;
     const wav = segment.korean
       ? await synthesizeKoreanAtJapaneseVolume(segment.text)
-      : await synthesizeJapanese(segment.text, botId);
+      : await synthesizeJapanese(segment.text, speaker);
     return { wav, complete: wav !== null };
   }
 
@@ -143,7 +183,7 @@ async function synthesizeParts(
     segments.map((segment) =>
       segment.korean
         ? synthesizeKoreanAtJapaneseVolume(segment.text)
-        : synthesizeJapanese(segment.text, botId, MIXED_SAMPLE_RATE),
+        : synthesizeJapanese(segment.text, speaker, MIXED_SAMPLE_RATE),
     ),
   );
   const synthesized = wavs.filter((wav) => wav !== null);
@@ -165,10 +205,9 @@ async function synthesizeParts(
  */
 async function synthesizeJapanese(
   text: string,
-  botId: string,
+  speaker: number,
   sampleRate?: number,
 ): Promise<Buffer | null> {
-  const speaker = speakerOf(botId);
   try {
     // 読みと抑揚を決める audio_query の結果を、そのまま synthesis へ渡す 2 段構成
     const query = await fetch(
