@@ -7,8 +7,9 @@ import { soundsDir } from "./sounds.js";
 import { enqueueText, getSession } from "./voice.js";
 import { applyYomi } from "./yomi.js";
 
-// 長文を最後まで読むと入退室の音がその分待たされるので、ここで打ち切る
-export const MAX_SPEECH_LENGTH = 100;
+// 長文を最後まで読むと入退室の音がその分待たされるので、ここで打ち切る。Raspberry Pi 4
+// では 12 字の合成でも 5 秒ほどかかり、長いほど読み上げが遅れる
+export const MAX_SPEECH_LENGTH = 10;
 
 const DEFAULT_VC_CHAT_DELETE_SECONDS = 30;
 // setTimeout の上限（約24.8日）より十分短く、分と秒の取り違えのような

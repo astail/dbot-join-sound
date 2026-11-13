@@ -225,7 +225,9 @@ test("別のBotへのコマンドは読まず、人へのメンションは読�
   readChatMessage(chatMessage("vc-1", "<@2222222222> join"));
   readChatMessage(chatMessage("vc-1", "<@3333333333> こんにちは"));
 
-  assert.deepEqual(enqueued, ["<@3333333333> こんにちは"]);
+  // 人へのメンションの発言だけ読む（本文は MAX_SPEECH_LENGTH で打ち切られる）
+  assert.equal(enqueued.length, 1);
+  assert.ok(enqueued[0].startsWith("<@3333"));
 });
 
 test("VC付属チャットの読み上げを止めても指定チャンネルは読む", async () => {
@@ -451,4 +453,20 @@ test.describe("VC付属チャットの自動削除", () => {
 
     assert.deepEqual(errors, []);
   });
+});
+
+test("読み上げ用に置き換える決まった言い回しは、すべて保存の対象になっている", async () => {
+  const { FIXED_PHRASES } = await import("../src/voicevox.ts");
+  const outputs = [
+    toSpeechText("||ネタバレ||"),
+    toSpeechText("https://example.com"),
+    toSpeechText("あ".repeat(MAX_SPEECH_LENGTH + 1)).split(" ").at(-1)!,
+    toAttachmentNotice([{ contentType: "image/png", name: "a.png" }]),
+    toAttachmentNotice([{ contentType: "video/mp4", name: "a.mp4" }]),
+    toAttachmentNotice([
+      { contentType: "image/png", name: "a.png" },
+      { contentType: "video/mp4", name: "a.mp4" },
+    ]),
+  ];
+  assert.deepEqual(outputs.sort(), [...FIXED_PHRASES].sort());
 });
