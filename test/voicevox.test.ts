@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test, { after, beforeEach, mock } from "node:test";
 import type { NoticeKind } from "../src/voicevox.ts";
+
+// 入退室案内の保存先を一時ディレクトリにし、テストごとに空にする
+const soundsDir = mkdtempSync(join(tmpdir(), "voicevox-test-"));
+const noticeCacheDir = join(soundsDir, "notice-cache");
+mock.module("../src/sounds.ts", { namedExports: { soundsDir } });
+beforeEach(() => rmSync(noticeCacheDir, { recursive: true, force: true }));
+after(() => rmSync(soundsDir, { recursive: true, force: true }));
 
 // 1 体目はひまり（14）、2 体目は猫使ビィ（58）
 process.env.VOICEVOX_SPEAKER = "14,58";
@@ -54,6 +64,8 @@ test("不正な話者IDを拒否する", () => {
 
 // VOICEVOX へ送った話者 ID を返す
 async function speakerFor(botId: string): Promise<string | undefined> {
+  // 同じ話者の案内を続けて合成すると保存済みの WAV が返り、VOICEVOX を呼ばないため
+  rmSync(noticeCacheDir, { recursive: true, force: true });
   const urls: string[] = [];
   await synthesizeWith(async (input) => {
     urls.push(String(input));
@@ -284,4 +296,71 @@ test("韓国語だけの文もPiperの音量を下げる", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// 呼ばれた回数を数えながら、日本語だけの案内を合成したものとして返す
+function countingFetch(calls: string[]): typeof globalThis.fetch {
+  return async (input) => {
+    calls.push(String(input));
+    return String(input).includes("/audio_query")
+      ? new Response('{"accent_phrases":[]}')
+      : new Response(Buffer.from("RIFF-fake-wav"));
+  };
+}
+
+test("同じ入退室案内は2回目からVOICEVOXを呼ばずに保存済みのWAVを返す", async () => {
+  const calls: string[] = [];
+  assert.equal((await synthesizeWith(countingFetch(calls)))?.toString(), "RIFF-fake-wav");
+  assert.equal(calls.length, 2);
+
+  assert.equal((await synthesizeWith(countingFetch(calls)))?.toString(), "RIFF-fake-wav");
+  assert.equal(calls.length, 2, "2 回目は合成しない");
+  assert.equal(readdirSync(noticeCacheDir).length, 1);
+});
+
+test("案内の種類か話者が違えば別に合成する", async () => {
+  assignSpeaker("bot-a", 0);
+  assignSpeaker("bot-b", 1);
+  const calls: string[] = [];
+  await synthesizeWith(countingFetch(calls), "join", "bot-a");
+  await synthesizeWith(countingFetch(calls), "leave", "bot-a");
+  await synthesizeWith(countingFetch(calls), "join", "bot-b");
+  assert.equal(calls.length, 6);
+  assert.equal(readdirSync(noticeCacheDir).length, 3);
+});
+
+test("合成に失敗した入退室案内は保存しない", async () => {
+  await synthesizeWith(async () => new Response("boom", { status: 500 }));
+  const calls: string[] = [];
+  assert.equal((await synthesizeWith(countingFetch(calls)))?.toString(), "RIFF-fake-wav");
+  assert.equal(calls.length, 2, "前回の失敗を使い回さず合成し直す");
+});
+
+test("Piperが落ちて日本語だけ読めた入退室案内は保存しない", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    globalThis.fetch = mixedFetch([], false);
+    assert.deepEqual(await synthesizeNotice("김철수", "join", "bot-1"), makeWav(22050, [1]));
+
+    const requests: string[] = [];
+    globalThis.fetch = mixedFetch(requests);
+    assert.deepEqual(await synthesizeNotice("김철수", "join", "bot-1"), makeWav(22050, [700, 1]));
+    assert.equal(requests.length, 3, "名前まで読めた音声を合成し直す");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
+  }
+});
+
+test("チャットの読み上げは保存しない", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = countingFetch([]);
+  try {
+    await synthesize("こんにちは", "bot-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(readdirSync(soundsDir), []);
 });
