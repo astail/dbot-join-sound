@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { splitKorean, synthesizeKorean } from "./korean.js";
+import { soundsDir } from "./sounds.js";
 
 const DEFAULT_URL = "http://voicevox:50021";
 const DEFAULT_SPEAKER = 14; // 冥鳴ひまり（ノーマル）
@@ -39,6 +43,10 @@ export function assignSpeaker(botId: string, index: number): void {
   botSpeakers.set(botId, speakers[index] ?? speakers[0]);
 }
 
+function speakerOf(botId: string): number {
+  return botSpeakers.get(botId) ?? speakers[0];
+}
+
 export type NoticeKind = "join" | "leave" | "move";
 
 const noticeTexts: Record<NoticeKind, string> = {
@@ -47,13 +55,43 @@ const noticeTexts: Record<NoticeKind, string> = {
   move: "チャンネルを移動しました",
 };
 
-/** 入退室案内の音声（WAV）を合成する。 */
+// 入退室の案内は同じ人なら毎回同じ文になるので、合成した WAV を残して使い回す。
+// Raspberry Pi などでは VOICEVOX の合成に数秒かかり、その分だけ案内が遅れるため。
+// sounds ボリュームに置いて毎日の再起動をまたいでも残す。話者か文（読み方の登録後の
+// 名前を含む）が変われば別のファイルになるので、古い読みが残ることはない
+const noticeCacheDir = join(soundsDir, "notice-cache");
+
+/** 入退室案内の音声（WAV）を合成する。同じ話者・同じ文は 2 回目から保存済みの WAV を返す。 */
 export async function synthesizeNotice(
   name: string,
   kind: NoticeKind,
   botId: string,
 ): Promise<Buffer | null> {
-  return synthesize(`${name}が${noticeTexts[kind]}`, botId);
+  const text = `${name}が${noticeTexts[kind]}`;
+  const key = createHash("sha256").update(`${speakerOf(botId)}\n${text}`).digest("hex");
+  const path = join(noticeCacheDir, `${key}.wav`);
+  try {
+    return await readFile(path);
+  } catch {
+    // 未保存（または読めない）なら合成し直す
+  }
+
+  const { wav, complete } = await synthesizeParts(text, botId);
+  // VOICEVOX か Piper が落ちて一部だけ読めた音声は残さず、次回また合成する
+  if (wav && complete) await saveNotice(path, wav);
+  return wav;
+}
+
+// 書きかけのファイルを読まないよう、別名で書いてから置き換える
+async function saveNotice(path: string, wav: Buffer): Promise<void> {
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    await mkdir(noticeCacheDir, { recursive: true });
+    await writeFile(tmp, wav);
+    await rename(tmp, path);
+  } catch (err) {
+    console.error("failed to cache notice:", err);
+  }
 }
 
 // 日本語と韓国語が混ざった文は WAV をつなぐので、VOICEVOX の出力を
@@ -84,12 +122,21 @@ export async function synthesize(
   text: string,
   botId: string,
 ): Promise<Buffer | null> {
+  return (await synthesizeParts(text, botId)).wav;
+}
+
+// complete は、どの部分も合成できたか（一部を飛ばしていないか）
+async function synthesizeParts(
+  text: string,
+  botId: string,
+): Promise<{ wav: Buffer | null; complete: boolean }> {
   const segments = splitKorean(text);
   if (segments.length === 1) {
     const [segment] = segments;
-    return segment.korean
-      ? synthesizeKoreanAtJapaneseVolume(segment.text)
-      : synthesizeJapanese(segment.text, botId);
+    const wav = segment.korean
+      ? await synthesizeKoreanAtJapaneseVolume(segment.text)
+      : await synthesizeJapanese(segment.text, botId);
+    return { wav, complete: wav !== null };
   }
 
   const wavs = await Promise.all(
@@ -100,12 +147,15 @@ export async function synthesize(
     ),
   );
   const synthesized = wavs.filter((wav) => wav !== null);
-  if (synthesized.length === 0) return null;
+  if (synthesized.length === 0) return { wav: null, complete: false };
   try {
-    return concatWav(synthesized);
+    return {
+      wav: concatWav(synthesized),
+      complete: synthesized.length === wavs.length,
+    };
   } catch (err) {
     console.error("failed to concat wav:", err);
-    return null;
+    return { wav: null, complete: false };
   }
 }
 
@@ -118,7 +168,7 @@ async function synthesizeJapanese(
   botId: string,
   sampleRate?: number,
 ): Promise<Buffer | null> {
-  const speaker = botSpeakers.get(botId) ?? speakers[0];
+  const speaker = speakerOf(botId);
   try {
     // 読みと抑揚を決める audio_query の結果を、そのまま synthesis へ渡す 2 段構成
     const query = await fetch(
