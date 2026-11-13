@@ -88,6 +88,8 @@ export function toSpeechText(content: string): string {
     .replace(/<\/([^:>]+):\d+>/g, "/$1")
     // カスタム絵文字は <:name:id> の形で、名前も読み物として意味をなさないことが多い
     .replace(/<a?:\w+:\d+>/g, "")
+    // 普通の絵文字も読まない。肌の色・国旗・ZWJ でつないだ絵文字・異体字セレクタも消す
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
   return text.length > MAX_SPEECH_LENGTH

@@ -144,6 +144,18 @@ test("読み方は打ち切る前に当てる", () => {
   assert.deepEqual(enqueued, [`${"あ".repeat(MAX_SPEECH_LENGTH - 2)}まめ`]);
 });
 
+test("絵文字は読まない", () => {
+  assert.equal(toSpeechText("おはよう😀"), "おはよう");
+  assert.equal(toSpeechText("👍🏻 了解"), "了解");
+  assert.equal(toSpeechText("👨‍👩‍👧 家族 🇯🇵"), "家族");
+  assert.equal(toSpeechText("❤️"), "");
+});
+
+test("絵文字だけの発言は読み上げない", () => {
+  readChatMessage(chatMessage("vc-1", "🎉🎉<:party:123456789>"));
+  assert.deepEqual(enqueued, []);
+});
+
 test("カスタム絵文字は読まない", () => {
   assert.equal(toSpeechText("いいね<:thumbsup_custom:123456789>"), "いいね");
   assert.equal(toSpeechText("<a:party:123456789>"), "");
