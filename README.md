@@ -109,6 +109,31 @@ DISCORD_TOKEN=1体目のトークン,2体目のトークン
 
 VOICEVOX Engine が停止していても Bot は動き続け、読み上げだけがスキップされます（登録済みの入室音は再生されます）。Piper が停止しているときは韓国語の部分だけを飛ばし、日本語の部分は読み上げます。
 
+### Raspberry Pi で動かす
+
+Raspberry Pi 4（8GB、64bit OS）でもそのまま `docker compose up -d --build` で動きます。VOICEVOX Engine と Piper のイメージは arm64 版があり、Bot も arm64 向けにビルドされます。ただし VOICEVOX の音声合成は x86 の PC よりかなり遅いため、次の設定を入れてください。
+
+- **VOICEVOX のスレッド数を指定する**: 既定では 1 コアしか使わず遅いため、`compose.override.yaml`（Compose が自動で読み込む）を置いて 4 コアを使わせます
+
+  ```yaml
+  services:
+    voicevox:
+      environment:
+        VV_CPU_NUM_THREADS: "4"
+  ```
+
+- **タイムアウトを伸ばす**: 既定の `VOICEVOX_TIMEOUT_MS=10000` では 20 字前後を超えるチャットが合成中にタイムアウトし、読み上げが飛ばされます。`.env` に `VOICEVOX_TIMEOUT_MS=30000` を指定してください
+
+Raspberry Pi 4 Model B（冷却あり）で `/synthesis`（話者 14）にかかった時間の実測値です。
+
+| 設定 | 12 字（「たなかさんが入室しました」） | 22 字 |
+| --- | --- | --- |
+| 既定（1.8GHz） | 8.6 秒 | 13.0 秒 |
+| `VV_CPU_NUM_THREADS=4` | 5.4 秒 | 8.3 秒 |
+| `VV_CPU_NUM_THREADS=4` + 2.0GHz（`arm_freq=2000`、`over_voltage=6`） | 4.9 秒 | 7.5 秒 |
+
+韓国語の Piper は短い文で約 0.6 秒です。オーバークロックの効果は 1 割ほどなので、まずはスレッド数の指定だけで十分です。オーバークロックする場合は冷却を付け、`vcgencmd measure_temp` と `vcgencmd get_throttled` で温度とクロック低下を確認してください（上の 2.0GHz では連続合成でも最高 45℃、クロック低下なし）。
+
 ### 3. ローカルで起動
 
 ```bash
