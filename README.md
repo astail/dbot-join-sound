@@ -110,6 +110,7 @@ DISCORD_TOKEN=1体目のトークン,2体目のトークン
 VOICEVOX Engine が停止していても Bot は動き続け、読み上げだけがスキップされます（登録済みの入室音は再生されます）。Piper が停止しているときは韓国語の部分だけを飛ばし、日本語の部分は読み上げます。
 
 入退室の読み上げ（「〇〇が入室しました」など）は、一度合成した音声を `sounds` ボリュームの `notice-cache/` に保存し、同じ話者・同じ文なら 2 回目から VOICEVOX を呼ばずに再生します。Raspberry Pi のように合成に数秒かかる環境でも、一度入室したことのある人なら待たずに読み上げられます。`/yomi` で読み方を変えたときや話者を変えたときは文や話者が変わるため、自動的に合成し直します。VOICEVOX Engine を更新して声を作り直したいときは、`docker compose exec bot rm -rf sounds/notice-cache` で保存済みの音声を消してください。合成の一部が失敗した音声（Piper が落ちていて韓国語の名前を飛ばしたものなど）は保存しません。チャットの読み上げは毎回合成します。
+
 ### Raspberry Pi で動かす
 
 Raspberry Pi 4（8GB、64bit OS）でもそのまま `docker compose up -d --build` で動きます。VOICEVOX Engine と Piper のイメージは arm64 版があり、Bot も arm64 向けにビルドされます。ただし VOICEVOX の音声合成は x86 の PC よりかなり遅いため、次の設定を入れてください。
