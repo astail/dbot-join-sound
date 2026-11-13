@@ -30,6 +30,9 @@ services:
     image: voicevox/voicevox_engine:cpu-0.26.1@sha256:46fe4ddaef27e8bfc2ff4f9709d27f3e38e295d405c5f9351d7c62056e0b4ca7
     init: true
     restart: unless-stopped
+    environment:
+      # 既定（0 = 自動）だと 1 コアしか使わず、合成が遅いため
+      VV_CPU_NUM_THREADS: ${VOICEVOX_CPU_NUM_THREADS:-4}
 
   # 韓国語の読み上げ用。VOICEVOX と同じくポートは公開しない
   piper:
