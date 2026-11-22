@@ -27,7 +27,7 @@ services:
 
   # 未登録ユーザーの入室読み上げ用。ポートは公開せず bot からのみ参照する
   voicevox:
-    image: voicevox/voicevox_engine:cpu-0.26.1@sha256:46fe4ddaef27e8bfc2ff4f9709d27f3e38e295d405c5f9351d7c62056e0b4ca7
+    image: voicevox/voicevox_engine:cpu-0.26.2@sha256:5bab72a79a45f2ad899a531200042800e149670d3b2ad7a5a1d66e5671ddfd3b
     init: true
     restart: unless-stopped
     environment:
