@@ -13,6 +13,7 @@ import {
 import { ChannelType, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import { createReadStream, existsSync } from "node:fs";
 import { Readable } from "node:stream";
+import { listenForSpeech, voiceTranslation } from "./k2j.js";
 import {
   MAX_SOUND_SECONDS,
   joinSoundEnabled,
@@ -148,13 +149,15 @@ export async function joinChannel(
 ): Promise<Session> {
   const guildId = channel.guild.id;
   const botId = channel.client.user.id;
+  const translatesSpeech = voiceTranslation() !== null;
   const connection = joinVoiceChannel({
     channelId: channel.id,
     guildId,
     // 同じ guild に複数の Bot が接続するので、接続を Bot ごとに分ける
     group: botId,
     adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: true,
+    // 音声翻訳を使うときは発話を受け取るので、スピーカーをミュートしない
+    selfDeaf: !translatesSpeech,
     selfMute: false,
   });
 
@@ -171,6 +174,7 @@ export async function joinChannel(
   };
   // Ready を待つ間に別チャンネルへの参加が走らないよう、先にセッションを予約する
   sessions.set(sessionKey(botId, guildId), session);
+  if (translatesSpeech) listenForSpeech(connection, channel.guild, session);
 
   player.on(AudioPlayerStatus.Idle, () => void playNext(session));
   player.on("error", (err) => {

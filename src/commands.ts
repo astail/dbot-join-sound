@@ -5,6 +5,8 @@ import {
   type Interaction,
 } from "discord.js";
 import { readChannels, writeChannels } from "./chat.js";
+import { readSpeakers, voiceTranslation, writeSpeakers, type Speakers } from "./k2j.js";
+import { LANG_NAMES, otherLang, type Lang } from "./translator.js";
 import { hasSessionInGuild } from "./voice.js";
 import {
   MAX_READING_LENGTH,
@@ -71,6 +73,40 @@ export const commands = [
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("読み上げるチャンネルの一覧を表示します"),
     ),
+  new SlashCommandBuilder()
+    .setName("k2j")
+    .setDescription("VC で話者の発話を韓国語⇔日本語に訳して字幕にします")
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("翻訳する話者として指定します")
+        .addUserOption((option) =>
+          option.setName("user").setDescription("指定する人").setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("lang")
+            .setDescription("その人が話す言語（省略すると韓国語）")
+            .addChoices(
+              { name: "韓国語（日本語に訳す）", value: "ko" },
+              { name: "日本語（韓国語に訳す）", value: "ja" },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("話者の指定を外します")
+        .addUserOption((option) =>
+          option.setName("user").setDescription("指定を外す人").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("話者の一覧を表示します"),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("status").setDescription("音声翻訳の設定と処理した件数を表示します"),
+    ),
 ].map((command) => command.toJSON());
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
@@ -88,6 +124,18 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   }
 
   const subcommand = interaction.options.getSubcommand();
+  if (interaction.commandName === "k2j") {
+    if (subcommand === "add") {
+      await addSpeaker(interaction);
+    } else if (subcommand === "remove") {
+      await removeSpeaker(interaction);
+    } else if (subcommand === "list") {
+      await listSpeakers(interaction);
+    } else if (subcommand === "status") {
+      await showK2jStatus(interaction);
+    }
+    return;
+  }
   if (interaction.commandName === "shaberu-ch") {
     if (subcommand === "add") {
       await addChannel(interaction);
@@ -205,4 +253,105 @@ async function listChannels(interaction: ChatInputCommandInteraction): Promise<v
   await interaction.reply(
     `読み上げるチャンネル:\n${channels.map((id) => `<#${id}>`).join("\n")}`,
   );
+}
+
+// 話者の名前はメンションで見せるが、通知は飛ばさない
+const NO_MENTIONS = { parse: [] };
+
+function speakerCounts(speakers: Speakers): string {
+  const ids = Object.values(speakers);
+  const ko = ids.filter((lang) => lang === "ko").length;
+  return `韓国語話者 ${ko} 人 / 日本語話者 ${ids.length - ko} 人`;
+}
+
+async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<void> {
+  const user = interaction.options.getUser("user", true);
+  const lang = (interaction.options.getString("lang") ?? "ko") as Lang;
+  if (user.bot) {
+    await interaction.reply("Bot は話者に指定できません。");
+    return;
+  }
+  const speakers = readSpeakers();
+  const previous = speakers[user.id];
+  if (previous === lang) {
+    await interaction.reply({
+      content: `<@${user.id}> はすでに${LANG_NAMES[lang]}話者です。`,
+      allowedMentions: NO_MENTIONS,
+    });
+    return;
+  }
+  // 1 人に 1 言語なので、別の言語で指定していたら置き換える
+  speakers[user.id] = lang;
+  await writeSpeakers(speakers);
+  const changed = previous ? `（${LANG_NAMES[previous]}話者から変更）` : "";
+  await interaction.reply({
+    content:
+      `<@${user.id}> を${LANG_NAMES[lang]}話者にしました${changed}。` +
+      `Bot がいる通話での発話を${LANG_NAMES[otherLang(lang)]}の字幕にします。\n` +
+      `現在: ${speakerCounts(speakers)}`,
+    allowedMentions: NO_MENTIONS,
+  });
+}
+
+async function removeSpeaker(interaction: ChatInputCommandInteraction): Promise<void> {
+  const user = interaction.options.getUser("user", true);
+  const speakers = readSpeakers();
+  if (!speakers[user.id]) {
+    await interaction.reply({
+      content: `<@${user.id}> は話者に指定されていません。`,
+      allowedMentions: NO_MENTIONS,
+    });
+    return;
+  }
+  delete speakers[user.id];
+  await writeSpeakers(speakers);
+  await interaction.reply({
+    content: `<@${user.id}> の指定を外しました（現在: ${speakerCounts(speakers)}）。`,
+    allowedMentions: NO_MENTIONS,
+  });
+}
+
+async function listSpeakers(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 一覧は全サーバー共通。ほかのサーバーの人も混ざるが、メンバーの一覧は取れないので絞らない
+  const speakers = Object.entries(readSpeakers());
+  const section = (lang: Lang) => {
+    const ids = speakers.filter(([, l]) => l === lang).map(([id]) => id);
+    return ids.length === 0
+      ? []
+      : [
+          `${LANG_NAMES[lang]}話者 → ${LANG_NAMES[otherLang(lang)]}（${ids.length} 人）:`,
+          ...ids.map((id) => `- <@${id}>`),
+        ];
+  };
+  const lines = [...section("ko"), ...section("ja")];
+  if (lines.length === 0) {
+    await interaction.reply("話者はまだ指定されていません。");
+    return;
+  }
+  await interaction.reply({ content: lines.join("\n"), allowedMentions: NO_MENTIONS });
+}
+
+async function showK2jStatus(interaction: ChatInputCommandInteraction): Promise<void> {
+  const active = voiceTranslation();
+  if (!active) {
+    await interaction.reply(
+      "VC の音声翻訳は止まっています（`.env` に OPENAI_API_KEY と翻訳エンジンの API キーが必要です）。",
+    );
+    return;
+  }
+  // DeepL の使用量を問い合わせる間に応答の期限（3 秒）を過ぎないよう、先に受け付けておく
+  await interaction.deferReply();
+  const { pipeline, sttModel } = active;
+  const stats = pipeline.statsFor(interaction.guildId ?? "");
+  const lines = [
+    `翻訳: ${pipeline.translator.name} / 文字起こし: OpenAI (${sttModel})`,
+    `話者: ${speakerCounts(readSpeakers())}`,
+    `このサーバー: 字幕 ${stats.processed} 件 / 捨てた発話 ${stats.dropped} 件 / 失敗 ${stats.errors} 件` +
+      (stats.lastLatencyMs !== null
+        ? ` / 直近の遅延 ${(stats.lastLatencyMs / 1000).toFixed(1)} 秒`
+        : ""),
+  ];
+  const usage = await pipeline.translator.usage?.();
+  if (usage) lines.push(usage);
+  await interaction.editReply(lines.join("\n"));
 }
