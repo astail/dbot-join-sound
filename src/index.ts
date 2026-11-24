@@ -3,11 +3,17 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  Partials,
   type Guild,
 } from "discord.js";
+import { join } from "node:path";
 import { readChatMessage, scheduleVcChatDeletion } from "./chat.js";
 import { commands, handleInteraction } from "./commands.js";
+import { ReactionTranslator } from "./reaction.js";
 import { handleMessage } from "./register.js";
+import { soundsDir } from "./sounds.js";
+import { TranslationIndex } from "./translations.js";
+import { createTranslator } from "./translator.js";
 import { handleVoiceStateUpdate } from "./voice.js";
 import { assignSpeaker, prepareFixedPhrases } from "./voicevox.js";
 
@@ -29,6 +35,14 @@ if (tokens.length === 0) {
 // イメージのビルド時に埋め込まれる。どのコードが動いているか Discord から確認できる
 const commit = process.env.GIT_COMMIT || "unknown";
 
+// 翻訳エンジンの API キーがなければ null。リアクション翻訳だけを止めて起動する
+const translator = createTranslator();
+console.log(
+  translator
+    ? `reaction translation: enabled (${translator.name})`
+    : "reaction translation: disabled (no API key for MT_PROVIDER)",
+);
+
 // ギルドごとに登録すると即座に反映される（グローバル登録は反映まで最大1時間かかる）。
 // 失敗しても入室音の再生には関係ないので、Bot は止めずにログだけ残す
 function registerCommands(guild: Guild): void {
@@ -39,6 +53,8 @@ function registerCommands(guild: Guild): void {
 
 function createClient(index: number): Client {
   const registersCommands = index === 0;
+  // リアクション翻訳も 1 体目だけが受け持つ。全員が反応すると翻訳が Bot の数だけ投稿される
+  const translatesReactions = index === 0 && translator !== null;
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -46,7 +62,12 @@ function createClient(index: number): Client {
       GatewayIntentBits.GuildMessages,
       // チャットの読み上げに本文が要る。Developer Portal での有効化が必要な特権 Intent
       GatewayIntentBits.MessageContent,
+      ...(translatesReactions ? [GatewayIntentBits.GuildMessageReactions] : []),
     ],
+    // 起動より前の発言（キャッシュにないメッセージ）へのリアクションや削除も受け取るため
+    partials: translatesReactions
+      ? [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User]
+      : [],
     // ClientReady で設定すると再接続のたびに消えるため、IDENTIFY に載せる
     presence: {
       activities: [{ name: commit, type: ActivityType.Custom, state: commit }],
@@ -62,6 +83,12 @@ function createClient(index: number): Client {
 
   // 起動後に招待されたサーバーにも登録する
   if (registersCommands) client.on(Events.GuildCreate, registerCommands);
+
+  if (translatesReactions) {
+    // 元の発言と翻訳の対応は、再起動後も削除や編集に追随できるよう sounds ボリュームに保存する
+    const translations = new TranslationIndex(join(soundsDir, "translations.db"));
+    new ReactionTranslator(client, translator, translations).register();
+  }
 
   // リスナーがないと error イベントでプロセスが落ちる
   client.on(Events.Error, (err) => {
