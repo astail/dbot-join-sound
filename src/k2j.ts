@@ -21,7 +21,8 @@ const RMS_THRESHOLD = 250;
 const STT_CONCURRENCY = 2;
 // 同じ人の同じ文がこの間隔で続いたら捨てる。文字起こしが無音から同じ文を作り続けることがある
 const DUPLICATE_MS = 5_000;
-// 失敗の知らせでチャットを埋めないよう、サーバーごとにこの間隔に 1 回まで
+// 失敗の知らせや受信の失敗のログで埋め尽くさないよう、通話（Bot と通話の組）ごと・
+// 人ごとにこの間隔に 1 回まで
 const ERROR_NOTICE_INTERVAL_MS = 30_000;
 const STT_TIMEOUT_MS = 60_000;
 const DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe";
@@ -32,11 +33,21 @@ export type Speakers = Record<string, Lang>;
 
 const speakersPath = join(soundsDir, "k2j.json");
 
+// 誰かが話し出すたびに引くので、ファイルは起動後に 1 回だけ読んでメモリに持つ。
+// 書き換えは /k2j add と remove（writeSpeakers）だけ。手で編集したら再起動で読み直す
+let speakersCache: Speakers | undefined;
+
 export function readSpeakers(): Speakers {
+  speakersCache ??= loadSpeakers();
+  // 呼び出し側が書き換えてから writeSpeakers に渡すので、持っている一覧そのものは渡さない
+  return { ...speakersCache };
+}
+
+function loadSpeakers(): Speakers {
   if (!existsSync(speakersPath)) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(speakersPath, "utf8"));
-    // 手で編集して壊れていても Bot を止めない。誰の発話も訳さなくなるだけ
+    // 手で編集して壊れていても Bot を止めない。誰の発話も訳さなくなるだけ（ログは起動後に 1 回）
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw new Error("話者の一覧が JSON のオブジェクトではありません");
     }
@@ -54,6 +65,7 @@ export async function writeSpeakers(speakers: Speakers): Promise<void> {
   const tmp = `${speakersPath}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(speakers, null, 2));
   await rename(tmp, speakersPath);
+  speakersCache = { ...speakers };
 }
 
 async function transcribeWithOpenAI(
@@ -88,9 +100,10 @@ export type Stats = {
   lastLatencyMs: number | null;
 };
 
-// 字幕の出し先。通話（セッション）ごとに作る。original は文字起こしした文、to は訳文の言語
+// 字幕の出し先。通話（セッション）ごとに作る。original は文字起こしした文、to は訳文の言語。
+// post は実際に投稿できたら true（Bot が抜けた・送れるチャンネルがないときは false）
 export type SubtitleOutput = {
-  post(userId: string, original: string, translated: string, to: Lang): Promise<void>;
+  post(userId: string, original: string, translated: string, to: Lang): Promise<boolean>;
   notifyError(message: string): void;
 };
 
@@ -132,10 +145,12 @@ export class VoicePipeline {
       this.statsFor(guildId).dropped++;
       return;
     }
+    // 遅延は受け取った時点から測る（同じ人の前の発話を待つ時間も含める）
+    const receivedAt = Date.now();
     const key = `${guildId}:${userId}`;
     const previous = this.userChains.get(key) ?? Promise.resolve();
     const next = previous.then(() =>
-      this.process(guildId, userId, pcm, lang, out).catch((err: unknown) => {
+      this.process(guildId, userId, pcm, lang, out, receivedAt).catch((err: unknown) => {
         this.statsFor(guildId).errors++;
         console.error("voice translation failed:", err);
         // API のエラー本文には伏せ字の API キーの一部が入ることがあるので、チャットには出さない
@@ -153,8 +168,8 @@ export class VoicePipeline {
     pcm: Buffer,
     from: Lang,
     out: SubtitleOutput,
+    receivedAt: number,
   ): Promise<void> {
-    const started = Date.now();
     const stats = this.statsFor(guildId);
 
     const original = await this.withSttSlot(() =>
@@ -165,12 +180,10 @@ export class VoicePipeline {
       return;
     }
     const last = this.lastText.get(userId);
-    const now = Date.now();
-    if (last && last.text === original && now - last.at < DUPLICATE_MS) {
+    if (last && last.text === original && Date.now() - last.at < DUPLICATE_MS) {
       stats.dropped++;
       return;
     }
-    this.lastText.set(userId, { text: original, at: now });
 
     const to = otherLang(from);
     const translated = (
@@ -181,11 +194,20 @@ export class VoicePipeline {
       return;
     }
     // 投稿の失敗（権限がないなど）は翻訳の失敗とは分けて、ログだけ残す
-    await out.post(userId, original, translated, to).catch((err: unknown) => {
+    const posted = await out.post(userId, original, translated, to).catch((err: unknown) => {
       console.error("failed to post subtitle:", err);
+      stats.errors++;
+      return null;
     });
+    if (posted === null) return;
+    if (!posted) {
+      stats.dropped++;
+      return;
+    }
+    // 字幕にできた文だけを覚える。翻訳や投稿に失敗した文は、言い直せばまた字幕にする
+    this.lastText.set(userId, { text: original, at: Date.now() });
     stats.processed++;
-    stats.lastLatencyMs = Date.now() - started;
+    stats.lastLatencyMs = Date.now() - receivedAt;
   }
 
   private async withSttSlot<T>(fn: () => Promise<T>): Promise<T> {
@@ -203,10 +225,14 @@ export class VoicePipeline {
 }
 
 /**
- * 指定した人の発話を 1 つ分受け取り、48kHz ステレオの PCM にして返す。
+ * 指定した人の発話を 1 つ分受け取り、48kHz ステレオの PCM にして返す。truncated は、
+ * 上限の長さで区切った（まだ話し続けているかもしれない）ことを示す。
  * Discord は人ごとに別の Opus の流れを送ってくるので、話者を聞き分ける必要はない。
  */
-function captureUtterance(receiver: VoiceReceiver, userId: string): Promise<Buffer> {
+export function captureUtterance(
+  receiver: Pick<VoiceReceiver, "subscribe">,
+  userId: string,
+): Promise<{ pcm: Buffer; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     const opus = receiver.subscribe(userId, {
       end: { behavior: EndBehaviorType.AfterSilence, duration: SILENCE_MS },
@@ -217,33 +243,38 @@ function captureUtterance(receiver: VoiceReceiver, userId: string): Promise<Buff
     const maxBytes = 48_000 * 4 * (MAX_UTTERANCE_MS / 1000);
     let done = false;
 
+    // デコーダー（opusscript）は destroy しないと WASM のメモリを返さない。残ったまま
+    // 増えると、入室音や読み上げの再生で例外になってプロセスが落ちるので、どの終わり方でも必ず消す
     const cleanup = () => {
       if (!opus.destroyed) opus.destroy();
       if (!decoder.destroyed) decoder.destroy();
     };
-    const finish = () => {
+    const finish = (truncated = false) => {
       if (done) return;
       done = true;
       cleanup();
-      resolve(Buffer.concat(chunks));
+      resolve({ pcm: Buffer.concat(chunks), truncated });
     };
     const fail = (err: Error) => {
       if (done) return;
       done = true;
       cleanup();
       // 途中まで受け取れていれば使う（暗号化のやり直しなどで、まれに途切れる）
-      if (total > 0) resolve(Buffer.concat(chunks));
+      if (total > 0) resolve({ pcm: Buffer.concat(chunks), truncated: false });
       else reject(err);
     };
 
     decoder.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
       total += chunk.length;
-      if (total >= maxBytes) finish();
+      if (total >= maxBytes) finish(true);
     });
-    decoder.once("end", finish);
+    decoder.once("end", () => finish());
     decoder.once("error", fail);
     opus.once("error", fail);
+    // Bot が通話を抜けて接続が破棄されると、受信のストリームは end も error も出さずに
+    // close だけで終わる。close でも終えないと、Promise もデコーダーも残り続ける
+    opus.once("close", () => finish());
     opus.pipe(decoder);
   });
 }
@@ -299,6 +330,8 @@ export function listenForSpeech(
   if (!active) return;
   const capturing = new Set<string>();
   let lastNoticeAt = 0;
+  // 受信の失敗のログを最後に出した時刻（人ごと）
+  const lastCaptureErrorAt = new Map<string, number>();
 
   const sendableChannel = () => {
     const channel = guild.channels.cache.get(session.channelId);
@@ -307,7 +340,7 @@ export function listenForSpeech(
   const out: SubtitleOutput = {
     async post(userId, original, translated, to) {
       const channel = sendableChannel();
-      if (session.destroyed || !channel) return;
+      if (session.destroyed || !channel) return false;
       const name = await displayName(guild, userId);
       // 韓国語の字幕は韓国語話者に向けたものなので、国旗を付けて見分けられるようにする
       const prefix = to === "ko" ? "🇰🇷 " : "";
@@ -316,6 +349,7 @@ export function listenForSpeech(
         allowedMentions: { parse: [] },
         flags: MessageFlags.SuppressNotifications,
       });
+      return true;
     },
     notifyError(message) {
       const now = Date.now();
@@ -330,19 +364,28 @@ export function listenForSpeech(
   const startCapture = (userId: string) => {
     if (session.destroyed || capturing.has(userId) || !readSpeakers()[userId]) return;
     capturing.add(userId);
+    let truncated = false;
     captureUtterance(connection.receiver, userId)
-      .then((pcm) => {
+      .then((captured) => {
+        truncated = captured.truncated;
         // 話している間に指定が変わったときのため、言語は話し終えた時点で引き直す
         const lang = readSpeakers()[userId];
-        if (!session.destroyed && lang && pcm.length > 0) {
-          active.pipeline.handleUtterance(guild.id, userId, pcm, lang, out);
+        if (!session.destroyed && lang && captured.pcm.length > 0) {
+          active.pipeline.handleUtterance(guild.id, userId, captured.pcm, lang, out);
         }
       })
-      .catch((err: unknown) => console.error(`failed to capture speech of ${userId}:`, err))
+      .catch((err: unknown) => {
+        // 復号に失敗し続けると、話している間ずっと 1 パケットごとに失敗する。ログは人ごとに間引く
+        const now = Date.now();
+        if (now - (lastCaptureErrorAt.get(userId) ?? 0) < ERROR_NOTICE_INTERVAL_MS) return;
+        lastCaptureErrorAt.set(userId, now);
+        console.error(`failed to capture speech of ${userId}:`, err);
+      })
       .finally(() => {
         capturing.delete(userId);
-        // 上限の長さで区切ったあとも話し続けていれば、続きを拾う
-        if (!session.destroyed && connection.receiver.speaking.users.has(userId)) {
+        // 上限の長さで区切ったあとも話し続けていれば、続きを拾う。失敗で終わったときは
+        // すぐに拾い直さず、次に話し始めるのを待つ（毎パケット失敗して拾い直し続けないように）
+        if (truncated && !session.destroyed && connection.receiver.speaking.users.has(userId)) {
           startCapture(userId);
         }
       });

@@ -140,3 +140,11 @@ test("日本語の定型文（ご視聴ありがとうございました など�
   assert.equal(isUsableTranscript("ご視聴ありがとうございました", "ja"), false);
   assert.equal(isUsableTranscript("チャンネル登録よろしくお願いします", "ja"), false);
 });
+
+test("日本語話者の「ううん」（いいえ）は字幕にし、「うん」「うーん」は捨てる", () => {
+  assert.equal(isUsableTranscript("ううん", "ja"), true);
+  assert.equal(isUsableTranscript("ううん、違う", "ja"), true);
+  assert.equal(isUsableTranscript("うん", "ja"), false);
+  assert.equal(isUsableTranscript("うーん", "ja"), false);
+  assert.equal(isUsableTranscript("うんうん", "ja"), false);
+});

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { unlink } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { unlink, writeFile } from "node:fs/promises";
+import { Readable } from "node:stream";
 import { join } from "node:path";
 import test, { afterEach, beforeEach, mock } from "node:test";
 import type { Interaction } from "discord.js";
@@ -18,7 +20,9 @@ mock.module("../src/voice.ts", {
 
 const {
   VoicePipeline,
+  captureUtterance,
   configureVoiceTranslation,
+  listenForSpeech,
   readSpeakers,
   voiceTranslation,
   writeSpeakers,
@@ -34,6 +38,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // 一覧はメモリにも持つので、ファイルを消す前に空にしておく
+  await writeSpeakers({});
   await unlink(speakersPath).catch(() => {});
 });
 
@@ -73,6 +79,7 @@ function fakeOutput() {
     out: {
       post: async (userId: string, original: string, translated: string, to: string) => {
         posts.push(`${userId}|${original}|${translated}|${to}`);
+        return true;
       },
       notifyError: (message: string) => {
         errors.push(message);
@@ -394,4 +401,241 @@ test("Bot が通話にいないときは /k2j も使えない", async () => {
   await handleInteraction(interaction);
   assert.equal(replies.length, 1);
   assert.deepEqual(readSpeakers(), {});
+});
+
+test("翻訳に失敗した文を言い直したら、重複として捨てずに字幕にする", async () => {
+  let failures = 1;
+  const { translator, calls } = fakeTranslator(async (text) => {
+    if (failures-- > 0) throw new Error("429 Too Many Requests");
+    return `訳:${text}`;
+  });
+  const pipeline = new VoicePipeline(async () => "오늘 뭐 해?", translator);
+  const { out, posts } = fakeOutput();
+  const error = mock.method(console, "error", () => {});
+  try {
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
+    await flush();
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
+    await flush();
+  } finally {
+    error.mock.restore();
+  }
+  assert.equal(calls.length, 2);
+  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?|ja"]);
+});
+
+test("字幕を投稿できなかったときは「字幕」に数えず、投稿の失敗は「失敗」に数える", async () => {
+  const pipeline = new VoicePipeline(async () => "오늘 뭐 해?", fakeTranslator().translator);
+  const error = mock.method(console, "error", () => {});
+  try {
+    // Bot が抜けた・送れるチャンネルがない
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", {
+      post: async () => false,
+      notifyError: () => {},
+    });
+    await flush();
+    // 送ろうとして失敗した
+    pipeline.handleUtterance("g1", "u2", speech(), "ko", {
+      post: async () => {
+        throw new Error("Missing Permissions");
+      },
+      notifyError: () => {},
+    });
+    await flush();
+  } finally {
+    error.mock.restore();
+  }
+  const stats = pipeline.statsFor("g1");
+  assert.equal(stats.processed, 0);
+  assert.equal(stats.dropped, 1);
+  assert.equal(stats.errors, 1);
+  assert.equal(stats.lastLatencyMs, null);
+});
+
+test("直近の遅延は、同じ人の前の発話を待った時間も含めて受け取った時点から測る", async () => {
+  mock.timers.enable({ apis: ["Date"], now: 0 });
+  try {
+    const resolvers: ((text: string) => void)[] = [];
+    const pipeline = new VoicePipeline(
+      () => new Promise((resolve) => resolvers.push(resolve)),
+      fakeTranslator().translator,
+    );
+    const { out } = fakeOutput();
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
+    await flush();
+    mock.timers.tick(1000);
+    resolvers[0]!("첫 번째 말");
+    await flush();
+    mock.timers.tick(500);
+    resolvers[1]!("두 번째 말");
+    await flush();
+    assert.equal(pipeline.statsFor("g1").lastLatencyMs, 1500);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("話者の一覧は一度読んだらメモリに持ち、話し出すたびにファイルを読み直さない", async () => {
+  await writeSpeakers({ "100": "ko" });
+  await writeFile(speakersPath, "{ 壊れた JSON");
+  const error = mock.method(console, "error", () => {});
+  try {
+    assert.deepEqual(readSpeakers(), { "100": "ko" });
+    assert.equal(error.mock.callCount(), 0);
+  } finally {
+    error.mock.restore();
+  }
+  // 渡した一覧を書き換えても、持っている一覧は変わらない
+  const speakers = readSpeakers();
+  speakers["200"] = "ja";
+  assert.deepEqual(readSpeakers(), { "100": "ko" });
+});
+
+// 本物の Opus パケット（20ms・48kHz ステレオ・字幕にする大きさの音）
+const prism = (await import("prism-media")).default;
+const opusPacket: Buffer = await new Promise((resolve) => {
+  const encoder = new prism.opus.Encoder({ rate: 48_000, channels: 2, frameSize: 960 });
+  encoder.once("data", (packet: Buffer) => {
+    encoder.destroy();
+    resolve(packet);
+  });
+  const pcm = Buffer.alloc(960 * 4);
+  for (let i = 0; i < 960; i++) {
+    const value = Math.round(8000 * Math.sin(i / 10));
+    pcm.writeInt16LE(value, i * 4);
+    pcm.writeInt16LE(value, i * 4 + 2);
+  }
+  encoder.write(pcm);
+});
+
+// @discordjs/voice の AudioReceiveStream の代わり。パケットを 1 つずつ流す
+function receiveStream(): Readable {
+  return new Readable({ objectMode: true, read() {} });
+}
+
+async function settle<T>(promise: Promise<T>, ms = 2000): Promise<T | "timeout"> {
+  return Promise.race([
+    promise,
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms)),
+  ]);
+}
+
+test("話している途中に接続が破棄されても（close だけで終わっても）、受け取れた分を返して終わる", async () => {
+  const stream = receiveStream();
+  const capture = captureUtterance({ subscribe: () => stream as never }, "u1");
+  for (let i = 0; i < 5; i++) stream.push(opusPacket);
+  await flush();
+  // @discordjs/voice は接続を破棄するとき、受信中のストリームをエラーなしで destroy する
+  stream.destroy();
+  const result = await settle(capture);
+  assert.notEqual(result, "timeout", "close だけで終わったときに Promise が終わらない");
+  if (result === "timeout") return;
+  assert.equal(result.truncated, false);
+  assert.equal(result.pcm.length, 5 * 960 * 4);
+});
+
+test("受信が失敗して何も受け取れていなければ、失敗として返す", async () => {
+  const stream = receiveStream();
+  const capture = captureUtterance({ subscribe: () => stream as never }, "u1");
+  stream.destroy(new Error("Failed to decrypt"));
+  await assert.rejects(capture, /Failed to decrypt/);
+});
+
+test("30 秒を超えて話し続けたら、そこで区切ったことを知らせる", async () => {
+  const stream = receiveStream();
+  const capture = captureUtterance({ subscribe: () => stream as never }, "u1");
+  for (let i = 0; i < 1501; i++) stream.push(opusPacket);
+  const result = await settle(capture, 10_000);
+  assert.notEqual(result, "timeout");
+  if (result === "timeout") return;
+  assert.equal(result.truncated, true);
+  assert.equal(stream.destroyed, true);
+});
+
+// listenForSpeech に渡す接続・サーバー・セッションの代わり
+function fakeCall() {
+  const streams: Readable[] = [];
+  const speaking = Object.assign(new EventEmitter(), { users: new Map<string, number>() });
+  const connection = {
+    receiver: {
+      speaking,
+      subscribe: mock.fn(() => {
+        const stream = receiveStream();
+        streams.push(stream);
+        return stream;
+      }),
+    },
+  };
+  const guild = { id: "g1", channels: { cache: { get: () => undefined } } };
+  const session = { channelId: "vc-1", destroyed: false };
+  return { connection, guild, session, speaking, streams };
+}
+
+// 文字起こしの API（OpenAI）を呼ばないよう、空の結果を返させる
+async function withSilentTranscription(run: () => Promise<void>): Promise<void> {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ text: "" }), {
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test("受信が失敗したら、話し続けていてもすぐには拾い直さず、ログも人ごとに間引く", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  const error = mock.method(console, "error", () => {});
+  try {
+    call.speaking.users.set("u1", 1);
+    call.speaking.emit("start", "u1");
+    call.streams[0]!.destroy(new Error("Failed to decrypt"));
+    await flush();
+    // 話し続けていても、失敗で終わったときは次に話し始めるまで待つ
+    assert.equal(call.connection.receiver.subscribe.mock.callCount(), 1);
+    assert.equal(error.mock.callCount(), 1);
+
+    call.speaking.emit("start", "u1");
+    call.streams[1]!.destroy(new Error("Failed to decrypt"));
+    await flush();
+    assert.equal(call.connection.receiver.subscribe.mock.callCount(), 2);
+    assert.equal(error.mock.callCount(), 1);
+  } finally {
+    error.mock.restore();
+  }
+});
+
+test("30 秒で区切ったあとも話し続けていれば、続きを拾う", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  await withSilentTranscription(async () => {
+    call.speaking.users.set("u1", 1);
+    call.speaking.emit("start", "u1");
+    for (let i = 0; i < 1501; i++) call.streams[0]!.push(opusPacket);
+    for (let i = 0; i < 500 && call.connection.receiver.subscribe.mock.callCount() < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(call.connection.receiver.subscribe.mock.callCount(), 2);
+    call.speaking.users.delete("u1");
+    call.streams[1]!.destroy();
+    await flush();
+  });
+});
+
+test("話者に指定していない人の声は受け取らない", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  call.speaking.emit("start", "u2");
+  await flush();
+  assert.equal(call.connection.receiver.subscribe.mock.callCount(), 0);
 });

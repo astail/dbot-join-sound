@@ -62,6 +62,9 @@ const JA_BACKCHANNEL_WORDS = new Set([
 const JA_BACKCHANNEL_SOUND =
   /^(?:(?:はー?い)+|(?:う+ー*ん+)+|え+ー*|あ+ー*|お+ー*|へ+ー*|ふ+ー*ん|ほ+ー*|ん+ー*|(?:は|あ)(?:は|あ)+|w+|笑+)$/;
 
+// 「う」が 2 つ以上続いて「ん」で終わるもの（ううん・うううん）。「うん」「うーん」は相槌のまま
+const NEGATIVE_UUN = /^う{2,}ん$/;
+
 function katakanaToHiragana(text: string): string {
   return text.replace(/[\u30a1-\u30f6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 }
@@ -74,7 +77,13 @@ export function isBackchannel(text: string, lang: Lang = "ko"): boolean {
     .filter(Boolean);
   const words = lang === "ja" ? JA_BACKCHANNEL_WORDS : BACKCHANNEL_WORDS;
   const sound = lang === "ja" ? JA_BACKCHANNEL_SOUND : BACKCHANNEL_SOUND;
-  return parts.length > 0 && parts.every((part) => words.has(part) || sound.test(part));
+  return (
+    parts.length > 0 &&
+    parts.every(
+      // 「ううん」（いいえ）は返事の中身なので捨てない。韓国語の「아니」と扱いをそろえる
+      (part) => !(lang === "ja" && NEGATIVE_UUN.test(part)) && (words.has(part) || sound.test(part)),
+    )
+  );
 }
 
 // Whisper 系の文字起こしが、無音や物音から作りがちな定型文（韓国語の YouTube 字幕に由来する）。
