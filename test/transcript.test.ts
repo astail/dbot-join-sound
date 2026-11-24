@@ -91,3 +91,52 @@ test("字幕に入れる文の markdown 記号をエスケープする", () => {
     "\\*bold\\* \\_it\\_ \\`code\\` \\|sp\\| \\~\\~s\\~\\~",
   );
 });
+
+test("日本語話者のふつうの発話は字幕にする", () => {
+  assert.equal(isUsableTranscript("今日のゲーム本当に面白かった", "ja"), true);
+  assert.equal(isUsableTranscript("明日何時にやる？", "ja"), true);
+  assert.equal(isUsableTranscript("ありがとう", "ja"), true);
+});
+
+test("日本語話者の相槌だけの発話は捨てる", () => {
+  for (const text of [
+    "はい",
+    "はいはい",
+    "はーい",
+    "うん",
+    "うんうん",
+    "うーん...",
+    "ええ",
+    "えー",
+    "あー",
+    "へー",
+    "ふーん",
+    "なるほど",
+    "そうそう",
+    "そうですね。",
+    "確かに",
+    "オッケー",
+    "ハハハ",
+    "www",
+    "はい、はい",
+    "あー、なるほど",
+  ]) {
+    assert.equal(isUsableTranscript(text, "ja"), false, text);
+  }
+});
+
+test("日本語話者の相槌で始まっても中身が続けば字幕にする", () => {
+  assert.equal(isUsableTranscript("はい、今から行きます", "ja"), true);
+  assert.equal(isUsableTranscript("うん、それでいいよ", "ja"), true);
+});
+
+test("日本語話者の結果に日本語の文字がなければ捨てる", () => {
+  assert.equal(isUsableTranscript("Thank you for watching", "ja"), false);
+  assert.equal(isUsableTranscript("오늘 게임 재밌었어", "ja"), false);
+  assert.equal(isUsableTranscript("...", "ja"), false);
+});
+
+test("日本語の定型文（ご視聴ありがとうございました など）は捨てる", () => {
+  assert.equal(isUsableTranscript("ご視聴ありがとうございました", "ja"), false);
+  assert.equal(isUsableTranscript("チャンネル登録よろしくお願いします", "ja"), false);
+});

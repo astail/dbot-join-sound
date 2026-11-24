@@ -71,8 +71,8 @@ function fakeOutput() {
     posts,
     errors,
     out: {
-      post: async (userId: string, ko: string, ja: string) => {
-        posts.push(`${userId}|${ko}|${ja}`);
+      post: async (userId: string, original: string, translated: string, to: string) => {
+        posts.push(`${userId}|${original}|${translated}|${to}`);
       },
       notifyError: (message: string) => {
         errors.push(message);
@@ -81,28 +81,62 @@ function fakeOutput() {
   };
 }
 
-test("発話を文字起こしして訳し、字幕にする", async () => {
+test("韓国語話者の発話を韓国語で文字起こしして日本語に訳し、字幕にする", async () => {
   const wavs: Buffer[] = [];
+  const languages: string[] = [];
   const { translator, calls } = fakeTranslator();
-  const pipeline = new VoicePipeline(async (wav) => {
+  const pipeline = new VoicePipeline(async (wav, language) => {
     wavs.push(wav);
+    languages.push(language);
     return "오늘 뭐 해?";
   }, translator);
   const { out, posts } = fakeOutput();
 
-  pipeline.handleUtterance("g1", "u1", speech(), out);
+  pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
   await flush();
 
-  // 文字起こしには 16kHz モノラルの WAV を渡す
+  // 文字起こしには 16kHz モノラルの WAV と話者の言語を渡す
   assert.equal(wavs.length, 1);
   assert.equal(wavs[0]!.readUInt32LE(24), 16_000);
+  assert.deepEqual(languages, ["ko"]);
   assert.deepEqual(calls, [
     { text: "오늘 뭐 해?", options: { from: "ko", to: "ja", speech: true } },
   ]);
-  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?"]);
+  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?|ja"]);
   const stats = pipeline.statsFor("g1");
   assert.equal(stats.processed, 1);
   assert.notEqual(stats.lastLatencyMs, null);
+});
+
+test("日本語話者の発話は日本語で文字起こしして韓国語に訳す", async () => {
+  const languages: string[] = [];
+  const { translator, calls } = fakeTranslator();
+  const pipeline = new VoicePipeline(async (_wav, language) => {
+    languages.push(language);
+    return "明日も一緒にやろう";
+  }, translator);
+  const { out, posts } = fakeOutput();
+
+  pipeline.handleUtterance("g1", "u1", speech(), "ja", out);
+  await flush();
+
+  assert.deepEqual(languages, ["ja"]);
+  assert.deepEqual(calls, [
+    { text: "明日も一緒にやろう", options: { from: "ja", to: "ko", speech: true } },
+  ]);
+  assert.deepEqual(posts, ["u1|明日も一緒にやろう|訳:明日も一緒にやろう|ko"]);
+});
+
+test("日本語話者の相槌も訳さない", async () => {
+  const { translator, calls } = fakeTranslator();
+  const pipeline = new VoicePipeline(async () => "うんうん、なるほど", translator);
+  const { out, posts } = fakeOutput();
+
+  pipeline.handleUtterance("g1", "u1", speech(), "ja", out);
+  await flush();
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(posts, []);
 });
 
 test("短すぎる発話と音量の小さい発話は文字起こしに回さない", async () => {
@@ -113,8 +147,8 @@ test("短すぎる発話と音量の小さい発話は文字起こしに回さ�
   }, fakeTranslator().translator);
   const { out, posts } = fakeOutput();
 
-  pipeline.handleUtterance("g1", "u1", speech(0.3), out);
-  pipeline.handleUtterance("g1", "u1", speech(0.5, 100), out);
+  pipeline.handleUtterance("g1", "u1", speech(0.3), "ko", out);
+  pipeline.handleUtterance("g1", "u1", speech(0.5, 100), "ko", out);
   await flush();
 
   assert.equal(transcribed, 0);
@@ -127,7 +161,7 @@ test("相槌だけの発話は訳さない", async () => {
   const pipeline = new VoicePipeline(async () => "네, 네", translator);
   const { out, posts } = fakeOutput();
 
-  pipeline.handleUtterance("g1", "u1", speech(), out);
+  pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
   await flush();
 
   assert.equal(calls.length, 0);
@@ -139,13 +173,13 @@ test("同じ人の同じ文が続けて届いたら 2 回目は捨てる", async
   const pipeline = new VoicePipeline(async () => "오늘 뭐 해?", fakeTranslator().translator);
   const { out, posts } = fakeOutput();
 
-  pipeline.handleUtterance("g1", "u1", speech(), out);
-  pipeline.handleUtterance("g1", "u1", speech(), out);
+  pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
+  pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
   // 別の人なら同じ文でも字幕にする
-  pipeline.handleUtterance("g1", "u2", speech(), out);
+  pipeline.handleUtterance("g1", "u2", speech(), "ko", out);
   await flush();
 
-  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?", "u2|오늘 뭐 해?|訳:오늘 뭐 해?"]);
+  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?|ja", "u2|오늘 뭐 해?|訳:오늘 뭐 해?|ja"]);
   assert.equal(pipeline.statsFor("g1").dropped, 1);
 });
 
@@ -157,8 +191,8 @@ test("同じ人の発話は、文字起こしが前後しても話した順に�
   );
   const { out, posts } = fakeOutput();
 
-  pipeline.handleUtterance("g1", "u1", speech(), out);
-  pipeline.handleUtterance("g1", "u1", speech(), out);
+  pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
+  pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
   await flush();
   // 2 つ目は 1 つ目が終わるまで文字起こしに回らない
   assert.equal(resolvers.length, 1);
@@ -167,7 +201,7 @@ test("同じ人の発話は、文字起こしが前後しても話した順に�
   resolvers[1]!("두 번째 말");
   await flush();
 
-  assert.deepEqual(posts, ["u1|첫 번째 말|訳:첫 번째 말", "u1|두 번째 말|訳:두 번째 말"]);
+  assert.deepEqual(posts, ["u1|첫 번째 말|訳:첫 번째 말|ja", "u1|두 번째 말|訳:두 번째 말|ja"]);
 });
 
 test("文字起こしは全体で 2 件までしか同時に投げない", async () => {
@@ -178,7 +212,7 @@ test("文字起こしは全体で 2 件までしか同時に投げない", async
   );
   const { out, posts } = fakeOutput();
 
-  for (const user of ["u1", "u2", "u3"]) pipeline.handleUtterance("g1", user, speech(), out);
+  for (const user of ["u1", "u2", "u3"]) pipeline.handleUtterance("g1", user, speech(), "ko", out);
   await flush();
   assert.equal(resolvers.length, 2);
   resolvers[0]!("첫 번째 말");
@@ -199,10 +233,10 @@ test("失敗したら数えてチャットに知らせ、次の発話は続け�
   const { out, posts, errors } = fakeOutput();
   const error = mock.method(console, "error", () => {});
   try {
-    pipeline.handleUtterance("g1", "u1", speech(), out);
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
     await flush();
     fail = false;
-    pipeline.handleUtterance("g1", "u1", speech(), out);
+    pipeline.handleUtterance("g1", "u1", speech(), "ko", out);
     await flush();
   } finally {
     error.mock.restore();
@@ -213,7 +247,7 @@ test("失敗したら数えてチャットに知らせ、次の発話は続け�
     "字幕を作れませんでした。`docker compose logs bot` で原因を確認してください。",
   ]);
   assert.equal(pipeline.statsFor("g1").errors, 1);
-  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?"]);
+  assert.deepEqual(posts, ["u1|오늘 뭐 해?|訳:오늘 뭐 해?|ja"]);
 });
 
 test("音声翻訳は OpenAI の API キーと翻訳エンジンの両方があるときだけ有効になる", () => {
@@ -230,10 +264,10 @@ test("音声翻訳は OpenAI の API キーと翻訳エンジンの両方があ�
   assert.equal(voiceTranslation()?.sttModel, "whisper-1");
 });
 
-test("話者の一覧を保存して読み出す", async () => {
-  assert.deepEqual(readSpeakers(), []);
-  await writeSpeakers(["1", "2"]);
-  assert.deepEqual(readSpeakers(), ["1", "2"]);
+test("話者の一覧（人ごとの言語）を保存して読み出す", async () => {
+  assert.deepEqual(readSpeakers(), {});
+  await writeSpeakers({ "1": "ko", "2": "ja" });
+  assert.deepEqual(readSpeakers(), { "1": "ko", "2": "ja" });
 });
 
 type Reply = { content: string; allowedMentions?: unknown };
@@ -242,6 +276,7 @@ type Reply = { content: string; allowedMentions?: unknown };
 async function runK2j(
   subcommand: string,
   user: { id: string; bot?: boolean } = { id: "100" },
+  lang: string | null = null,
 ): Promise<Reply[]> {
   const replies: Reply[] = [];
   const record = async (reply: string | Reply) => {
@@ -255,6 +290,7 @@ async function runK2j(
     options: {
       getSubcommand: () => subcommand,
       getUser: () => ({ bot: false, ...user }),
+      getString: () => lang,
     },
     reply: record,
     deferReply: async () => {},
@@ -264,40 +300,59 @@ async function runK2j(
   return replies;
 }
 
-test("/k2j add で話者に指定し、通知は飛ばさない", async () => {
+test("/k2j add は言語を省略すると韓国語話者にし、通知は飛ばさない", async () => {
   const [reply] = await runK2j("add", { id: "100" });
-  assert.match(reply!.content, /<@100> を韓国語話者にしました/);
+  assert.match(reply!.content, /<@100> を韓国語話者にしました。.*日本語の字幕にします/);
+  assert.match(reply!.content, /現在: 韓国語話者 1 人 \/ 日本語話者 0 人/);
   assert.deepEqual(reply!.allowedMentions, { parse: [] });
-  assert.deepEqual(readSpeakers(), ["100"]);
+  assert.deepEqual(readSpeakers(), { "100": "ko" });
 
   const [again] = await runK2j("add", { id: "100" });
   assert.match(again!.content, /すでに韓国語話者です/);
-  assert.deepEqual(readSpeakers(), ["100"]);
+});
+
+test("/k2j add lang:ja で日本語話者にし、別の言語の指定は置き換える", async () => {
+  const [reply] = await runK2j("add", { id: "100" }, "ja");
+  assert.match(reply!.content, /<@100> を日本語話者にしました。.*韓国語の字幕にします/);
+  assert.deepEqual(readSpeakers(), { "100": "ja" });
+
+  const [changed] = await runK2j("add", { id: "100" }, "ko");
+  assert.match(changed!.content, /韓国語話者にしました（日本語話者から変更）/);
+  assert.deepEqual(readSpeakers(), { "100": "ko" });
 });
 
 test("/k2j add で Bot は指定できない", async () => {
   const [reply] = await runK2j("add", { id: "200", bot: true });
-  assert.match(reply!.content, /Bot は韓国語話者に指定できません/);
-  assert.deepEqual(readSpeakers(), []);
+  assert.match(reply!.content, /Bot は話者に指定できません/);
+  assert.deepEqual(readSpeakers(), {});
 });
 
 test("/k2j remove で指定を外す", async () => {
-  await writeSpeakers(["100", "101"]);
+  await writeSpeakers({ "100": "ko", "101": "ja" });
   const [reply] = await runK2j("remove", { id: "100" });
-  assert.match(reply!.content, /<@100> を韓国語話者から外しました/);
-  assert.deepEqual(readSpeakers(), ["101"]);
+  assert.match(reply!.content, /<@100> の指定を外しました（現在: 韓国語話者 0 人 \/ 日本語話者 1 人）/);
+  assert.deepEqual(readSpeakers(), { "101": "ja" });
 
   const [missing] = await runK2j("remove", { id: "999" });
   assert.match(missing!.content, /指定されていません/);
 });
 
-test("/k2j list で話者の一覧を出す", async () => {
+test("/k2j list で言語ごとに話者の一覧を出す", async () => {
   const [empty] = await runK2j("list");
-  assert.equal(empty!.content, "韓国語話者はまだ指定されていません。");
+  assert.equal(empty!.content, "話者はまだ指定されていません。");
 
-  await writeSpeakers(["100", "101"]);
+  await writeSpeakers({ "100": "ko", "101": "ja", "102": "ko" });
   const [reply] = await runK2j("list");
-  assert.equal(reply!.content, "韓国語話者:\n<@100>\n<@101>");
+  assert.equal(
+    reply!.content,
+    [
+      "韓国語話者 → 日本語（2 人）:",
+      "- <@100>",
+      "- <@102>",
+      "日本語話者 → 韓国語（1 人）:",
+      "- <@101>",
+    ].join("\n"),
+  );
   assert.deepEqual(reply!.allowedMentions, { parse: [] });
 });
 
@@ -311,13 +366,13 @@ test("/k2j status は無効なら理由を、有効なら設定と件数を出�
     usage: async () => "DeepL の使用量: 10 / 500,000 文字",
   };
   configureVoiceTranslation(translator, { OPENAI_API_KEY: "sk-test" });
-  await writeSpeakers(["100"]);
+  await writeSpeakers({ "100": "ko" });
   const [reply] = await runK2j("status");
   assert.equal(
     reply!.content,
     [
       "翻訳: DeepL / 文字起こし: OpenAI (gpt-4o-mini-transcribe)",
-      "韓国語話者: 1 人",
+      "話者: 韓国語話者 1 人 / 日本語話者 0 人",
       "このサーバー: 字幕 0 件 / 捨てた発話 0 件 / 失敗 0 件",
       "DeepL の使用量: 10 / 500,000 文字",
     ].join("\n"),
@@ -338,5 +393,5 @@ test("Bot が通話にいないときは /k2j も使えない", async () => {
   } as unknown as Interaction;
   await handleInteraction(interaction);
   assert.equal(replies.length, 1);
-  assert.deepEqual(readSpeakers(), []);
+  assert.deepEqual(readSpeakers(), {});
 });

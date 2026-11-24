@@ -7,7 +7,7 @@ import { join } from "node:path";
 import prism from "prism-media";
 import { soundsDir } from "./sounds.js";
 import { escapeDiscord, isUsableTranscript } from "./transcript.js";
-import type { Translator } from "./translator.js";
+import { otherLang, type Lang, type Translator } from "./translator.js";
 import { pcm48kStereoToWav16kMono, pcmRms } from "./wav.js";
 
 // この長さ黙ったら 1 つの発話の終わりとみなす
@@ -26,35 +26,47 @@ const ERROR_NOTICE_INTERVAL_MS = 30_000;
 const STT_TIMEOUT_MS = 60_000;
 const DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe";
 
-// 韓国語話者として指定した人のユーザー ID。Bot・サーバーをまたいで共通の 1 ファイルに持つ
+// 話者に指定した人のユーザー ID → その人が話す言語（1 人に 1 言語）。
+// Bot・サーバーをまたいで共通の 1 ファイルに持つ
+export type Speakers = Record<string, Lang>;
+
 const speakersPath = join(soundsDir, "k2j.json");
 
-export function readSpeakers(): string[] {
-  if (!existsSync(speakersPath)) return [];
+export function readSpeakers(): Speakers {
+  if (!existsSync(speakersPath)) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(speakersPath, "utf8"));
     // 手で編集して壊れていても Bot を止めない。誰の発話も訳さなくなるだけ
-    if (!Array.isArray(parsed)) throw new Error("話者の一覧が JSON の配列ではありません");
-    return parsed.filter((id): id is string => typeof id === "string");
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("話者の一覧が JSON のオブジェクトではありません");
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, lang]) => lang === "ko" || lang === "ja"),
+    ) as Speakers;
   } catch (err) {
     console.error("failed to read k2j speakers:", err);
-    return [];
+    return {};
   }
 }
 
-export async function writeSpeakers(ids: string[]): Promise<void> {
+export async function writeSpeakers(speakers: Speakers): Promise<void> {
   // 一時ファイルへ書いてから rename で置き換え、途中で落ちても一覧が壊れないようにする
   const tmp = `${speakersPath}.${randomUUID()}.tmp`;
-  await writeFile(tmp, JSON.stringify(ids, null, 2));
+  await writeFile(tmp, JSON.stringify(speakers, null, 2));
   await rename(tmp, speakersPath);
 }
 
-async function transcribeWithOpenAI(wav: Buffer, apiKey: string, model: string): Promise<string> {
+async function transcribeWithOpenAI(
+  wav: Buffer,
+  language: Lang,
+  apiKey: string,
+  model: string,
+): Promise<string> {
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "audio.wav");
   form.append("model", model);
-  // 指定した人は韓国語で話す前提。自動判定にすると短い発話を別の言語と取り違える
-  form.append("language", "ko");
+  // 話者に指定した言語で聞き取る。自動判定にすると短い発話を別の言語と取り違える
+  form.append("language", language);
   form.append("response_format", "json");
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -76,9 +88,9 @@ export type Stats = {
   lastLatencyMs: number | null;
 };
 
-// 字幕の出し先。通話（セッション）ごとに作る
+// 字幕の出し先。通話（セッション）ごとに作る。original は文字起こしした文、to は訳文の言語
 export type SubtitleOutput = {
-  post(userId: string, ko: string, ja: string): Promise<void>;
+  post(userId: string, original: string, translated: string, to: Lang): Promise<void>;
   notifyError(message: string): void;
 };
 
@@ -94,7 +106,7 @@ export class VoicePipeline {
   private readonly waiters: (() => void)[] = [];
 
   constructor(
-    private readonly transcribe: (wav: Buffer) => Promise<string>,
+    private readonly transcribe: (wav: Buffer, language: Lang) => Promise<string>,
     readonly translator: Translator,
   ) {}
 
@@ -107,8 +119,14 @@ export class VoicePipeline {
     return stats;
   }
 
-  // pcm は 48kHz ステレオの s16le
-  handleUtterance(guildId: string, userId: string, pcm: Buffer, out: SubtitleOutput): void {
+  // pcm は 48kHz ステレオの s16le、lang は話者の言語
+  handleUtterance(
+    guildId: string,
+    userId: string,
+    pcm: Buffer,
+    lang: Lang,
+    out: SubtitleOutput,
+  ): void {
     const durationMs = (pcm.length / 4 / 48_000) * 1000;
     if (durationMs < MIN_UTTERANCE_MS || pcmRms(pcm) < RMS_THRESHOLD) {
       this.statsFor(guildId).dropped++;
@@ -117,7 +135,7 @@ export class VoicePipeline {
     const key = `${guildId}:${userId}`;
     const previous = this.userChains.get(key) ?? Promise.resolve();
     const next = previous.then(() =>
-      this.process(guildId, userId, pcm, out).catch((err: unknown) => {
+      this.process(guildId, userId, pcm, lang, out).catch((err: unknown) => {
         this.statsFor(guildId).errors++;
         console.error("voice translation failed:", err);
         // API のエラー本文には伏せ字の API キーの一部が入ることがあるので、チャットには出さない
@@ -133,31 +151,37 @@ export class VoicePipeline {
     guildId: string,
     userId: string,
     pcm: Buffer,
+    from: Lang,
     out: SubtitleOutput,
   ): Promise<void> {
     const started = Date.now();
     const stats = this.statsFor(guildId);
 
-    const ko = await this.withSttSlot(() => this.transcribe(pcm48kStereoToWav16kMono(pcm)));
-    if (!isUsableTranscript(ko)) {
+    const original = await this.withSttSlot(() =>
+      this.transcribe(pcm48kStereoToWav16kMono(pcm), from),
+    );
+    if (!isUsableTranscript(original, from)) {
       stats.dropped++;
       return;
     }
     const last = this.lastText.get(userId);
     const now = Date.now();
-    if (last && last.text === ko && now - last.at < DUPLICATE_MS) {
+    if (last && last.text === original && now - last.at < DUPLICATE_MS) {
       stats.dropped++;
       return;
     }
-    this.lastText.set(userId, { text: ko, at: now });
+    this.lastText.set(userId, { text: original, at: now });
 
-    const ja = (await this.translator.translate(ko, { from: "ko", to: "ja", speech: true })).trim();
-    if (!ja) {
+    const to = otherLang(from);
+    const translated = (
+      await this.translator.translate(original, { from, to, speech: true })
+    ).trim();
+    if (!translated) {
       stats.dropped++;
       return;
     }
     // 投稿の失敗（権限がないなど）は翻訳の失敗とは分けて、ログだけ残す
-    await out.post(userId, ko, ja).catch((err: unknown) => {
+    await out.post(userId, original, translated, to).catch((err: unknown) => {
       console.error("failed to post subtitle:", err);
     });
     stats.processed++;
@@ -241,7 +265,10 @@ export function configureVoiceTranslation(
   }
   const sttModel = env.STT_MODEL?.trim() || DEFAULT_STT_MODEL;
   current = {
-    pipeline: new VoicePipeline((wav) => transcribeWithOpenAI(wav, apiKey, sttModel), translator),
+    pipeline: new VoicePipeline(
+      (wav, language) => transcribeWithOpenAI(wav, language, apiKey, sttModel),
+      translator,
+    ),
     sttModel,
   };
   return true;
@@ -259,8 +286,9 @@ async function displayName(guild: Guild, userId: string): Promise<string> {
 }
 
 /**
- * 参加した通話で、韓国語話者に指定した人の発話を拾って字幕にする。字幕は Bot がいる
- * VC の付属チャットに投稿する（Bot が別の VC へ移されたら移動先に投稿する）。
+ * 参加した通話で、話者に指定した人の発話を拾って字幕にする。韓国語話者は日本語に、
+ * 日本語話者は韓国語に訳す。字幕は Bot がいる VC の付属チャットに投稿する
+ * （Bot が別の VC へ移されたら移動先に投稿する）。
  */
 export function listenForSpeech(
   connection: VoiceConnection,
@@ -277,12 +305,14 @@ export function listenForSpeech(
     return channel?.isSendable() ? channel : null;
   };
   const out: SubtitleOutput = {
-    async post(userId, ko, ja) {
+    async post(userId, original, translated, to) {
       const channel = sendableChannel();
       if (session.destroyed || !channel) return;
       const name = await displayName(guild, userId);
+      // 韓国語の字幕は韓国語話者に向けたものなので、国旗を付けて見分けられるようにする
+      const prefix = to === "ko" ? "🇰🇷 " : "";
       await channel.send({
-        content: `**${escapeDiscord(name)}**：${escapeDiscord(ja)}\n-# ${escapeDiscord(ko)}`,
+        content: `${prefix}**${escapeDiscord(name)}**：${escapeDiscord(translated)}\n-# ${escapeDiscord(original)}`,
         allowedMentions: { parse: [] },
         flags: MessageFlags.SuppressNotifications,
       });
@@ -298,12 +328,14 @@ export function listenForSpeech(
   };
 
   const startCapture = (userId: string) => {
-    if (session.destroyed || capturing.has(userId) || !readSpeakers().includes(userId)) return;
+    if (session.destroyed || capturing.has(userId) || !readSpeakers()[userId]) return;
     capturing.add(userId);
     captureUtterance(connection.receiver, userId)
       .then((pcm) => {
-        if (!session.destroyed && pcm.length > 0) {
-          active.pipeline.handleUtterance(guild.id, userId, pcm, out);
+        // 話している間に指定が変わったときのため、言語は話し終えた時点で引き直す
+        const lang = readSpeakers()[userId];
+        if (!session.destroyed && lang && pcm.length > 0) {
+          active.pipeline.handleUtterance(guild.id, userId, pcm, lang, out);
         }
       })
       .catch((err: unknown) => console.error(`failed to capture speech of ${userId}:`, err))
