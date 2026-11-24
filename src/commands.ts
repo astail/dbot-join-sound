@@ -5,6 +5,7 @@ import {
   type Interaction,
 } from "discord.js";
 import { readChannels, writeChannels } from "./chat.js";
+import { readSpeakers, voiceTranslation, writeSpeakers } from "./k2j.js";
 import { hasSessionInGuild } from "./voice.js";
 import {
   MAX_READING_LENGTH,
@@ -71,6 +72,31 @@ export const commands = [
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("読み上げるチャンネルの一覧を表示します"),
     ),
+  new SlashCommandBuilder()
+    .setName("k2j")
+    .setDescription("VC で韓国語話者の発話を日本語に訳して字幕にします")
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("韓国語話者として指定します")
+        .addUserOption((option) =>
+          option.setName("user").setDescription("指定する人").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("韓国語話者の指定を外します")
+        .addUserOption((option) =>
+          option.setName("user").setDescription("指定を外す人").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("韓国語話者の一覧を表示します"),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("status").setDescription("音声翻訳の設定と処理した件数を表示します"),
+    ),
 ].map((command) => command.toJSON());
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
@@ -88,6 +114,18 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   }
 
   const subcommand = interaction.options.getSubcommand();
+  if (interaction.commandName === "k2j") {
+    if (subcommand === "add") {
+      await addSpeaker(interaction);
+    } else if (subcommand === "remove") {
+      await removeSpeaker(interaction);
+    } else if (subcommand === "list") {
+      await listSpeakers(interaction);
+    } else if (subcommand === "status") {
+      await showK2jStatus(interaction);
+    }
+    return;
+  }
   if (interaction.commandName === "shaberu-ch") {
     if (subcommand === "add") {
       await addChannel(interaction);
@@ -205,4 +243,83 @@ async function listChannels(interaction: ChatInputCommandInteraction): Promise<v
   await interaction.reply(
     `読み上げるチャンネル:\n${channels.map((id) => `<#${id}>`).join("\n")}`,
   );
+}
+
+// 話者の名前はメンションで見せるが、通知は飛ばさない
+const NO_MENTIONS = { parse: [] };
+
+async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<void> {
+  const user = interaction.options.getUser("user", true);
+  if (user.bot) {
+    await interaction.reply("Bot は韓国語話者に指定できません。");
+    return;
+  }
+  const speakers = readSpeakers();
+  if (speakers.includes(user.id)) {
+    await interaction.reply({
+      content: `<@${user.id}> はすでに韓国語話者です。`,
+      allowedMentions: NO_MENTIONS,
+    });
+    return;
+  }
+  await writeSpeakers([...speakers, user.id]);
+  await interaction.reply({
+    content: `<@${user.id}> を韓国語話者にしました。Bot がいる通話での発話を日本語の字幕にします。`,
+    allowedMentions: NO_MENTIONS,
+  });
+}
+
+async function removeSpeaker(interaction: ChatInputCommandInteraction): Promise<void> {
+  const user = interaction.options.getUser("user", true);
+  const speakers = readSpeakers();
+  if (!speakers.includes(user.id)) {
+    await interaction.reply({
+      content: `<@${user.id}> は韓国語話者に指定されていません。`,
+      allowedMentions: NO_MENTIONS,
+    });
+    return;
+  }
+  await writeSpeakers(speakers.filter((id) => id !== user.id));
+  await interaction.reply({
+    content: `<@${user.id}> を韓国語話者から外しました。`,
+    allowedMentions: NO_MENTIONS,
+  });
+}
+
+async function listSpeakers(interaction: ChatInputCommandInteraction): Promise<void> {
+  // 一覧は全サーバー共通。ほかのサーバーの人も混ざるが、メンバーの一覧は取れないので絞らない
+  const speakers = readSpeakers();
+  if (speakers.length === 0) {
+    await interaction.reply("韓国語話者はまだ指定されていません。");
+    return;
+  }
+  await interaction.reply({
+    content: `韓国語話者:\n${speakers.map((id) => `<@${id}>`).join("\n")}`,
+    allowedMentions: NO_MENTIONS,
+  });
+}
+
+async function showK2jStatus(interaction: ChatInputCommandInteraction): Promise<void> {
+  const active = voiceTranslation();
+  if (!active) {
+    await interaction.reply(
+      "VC の音声翻訳は止まっています（`.env` に OPENAI_API_KEY と翻訳エンジンの API キーが必要です）。",
+    );
+    return;
+  }
+  // DeepL の使用量を問い合わせる間に応答の期限（3 秒）を過ぎないよう、先に受け付けておく
+  await interaction.deferReply();
+  const { pipeline, sttModel } = active;
+  const stats = pipeline.statsFor(interaction.guildId ?? "");
+  const lines = [
+    `翻訳: ${pipeline.translator.name} / 文字起こし: OpenAI (${sttModel})`,
+    `韓国語話者: ${readSpeakers().length} 人`,
+    `このサーバー: 字幕 ${stats.processed} 件 / 捨てた発話 ${stats.dropped} 件 / 失敗 ${stats.errors} 件` +
+      (stats.lastLatencyMs !== null
+        ? ` / 直近の遅延 ${(stats.lastLatencyMs / 1000).toFixed(1)} 秒`
+        : ""),
+  ];
+  const usage = await pipeline.translator.usage?.();
+  if (usage) lines.push(usage);
+  await interaction.editReply(lines.join("\n"));
 }

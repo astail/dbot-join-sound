@@ -8,12 +8,16 @@ export type TranslateOptions = {
   // null なら元の言語を翻訳エンジンに判定させる（英語など、文字種で決められないもの）
   from: Lang | null;
   to: Lang;
+  // VC の発話を文字起こしした文。認識ミスや話し言葉を含む
+  speech?: boolean;
 };
 
 export interface Translator {
-  // 起動ログに出す名前
+  // 起動ログと /k2j status に出す名前
   readonly name: string;
   translate(text: string, options: TranslateOptions): Promise<string>;
+  // /k2j status に出す使用量（DeepL の文字数）。取れないエンジンは持たない
+  usage?(): Promise<string | null>;
 }
 
 const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5";
@@ -61,7 +65,28 @@ class DeepLTranslator implements Translator {
     const json = (await res.json()) as { translations: { text: string }[] };
     return json.translations[0]?.text ?? "";
   }
+
+  async usage(): Promise<string | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/usage`, {
+        headers: { Authorization: `DeepL-Auth-Key ${this.apiKey}` },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) return null;
+      const json = (await res.json()) as { character_count: number; character_limit: number };
+      return `DeepL の使用量: ${json.character_count.toLocaleString()} / ${json.character_limit.toLocaleString()} 文字`;
+    } catch {
+      return null;
+    }
+  }
 }
+
+const SPEECH_PROMPT = [
+  "あなたは韓国語→日本語の同時通訳者です。",
+  "入力は Discord のボイスチャットの発話を音声認識した韓国語の文で、認識ミスや口語・ゲームのスラングを含みます。",
+  "文脈から自然に補い、日本語の話し言葉に翻訳してください。",
+  "訳文だけを出力し、説明・注釈・引用符は付けないでください。",
+].join("\n");
 
 function chatPrompt({ from, to }: TranslateOptions): string {
   const target = LANG_NAMES[to];
@@ -94,7 +119,7 @@ class ClaudeTranslator implements Translator {
       max_tokens: 16000,
       // 翻訳は深く考える仕事ではないので、考える量を減らして返信までの待ちを短くする
       output_config: { effort: "low" },
-      system: chatPrompt(options),
+      system: options.speech ? SPEECH_PROMPT : chatPrompt(options),
       messages: [{ role: "user", content: text }],
     });
     // 考えた内容（thinking）が先頭に来ることがあるので、本文だけを拾う

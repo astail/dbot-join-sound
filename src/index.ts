@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { readChatMessage, scheduleVcChatDeletion } from "./chat.js";
 import { commands, handleInteraction } from "./commands.js";
 import { ReactionTranslator } from "./reaction.js";
+import { configureVoiceTranslation } from "./k2j.js";
 import { handleMessage } from "./register.js";
 import { soundsDir } from "./sounds.js";
 import { TranslationIndex } from "./translations.js";
@@ -41,6 +42,12 @@ console.log(
   translator
     ? `reaction translation: enabled (${translator.name})`
     : "reaction translation: disabled (no API key for MT_PROVIDER)",
+);
+// 音声翻訳は、翻訳エンジンに加えて文字起こし用の OpenAI の API キーも要る
+console.log(
+  configureVoiceTranslation(translator)
+    ? "voice translation: enabled"
+    : "voice translation: disabled (needs OPENAI_API_KEY and an API key for MT_PROVIDER)",
 );
 
 // ギルドごとに登録すると即座に反映される（グローバル登録は反映まで最大1時間かかる）。
