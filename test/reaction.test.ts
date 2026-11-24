@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test, { mock } from "node:test";
-import { Events } from "discord.js";
+import { DiscordAPIError, Events, RESTJSONErrorCodes } from "discord.js";
 import {
   RateLimiter,
   ReactionTranslator,
@@ -32,6 +32,14 @@ test("すでに訳先の言語なら訳さない", () => {
   assert.equal(needsTranslation("こんにちは", "ko"), true);
   // 漢字だけでは決められないので訳す
   assert.equal(needsTranslation("了解", "ko"), true);
+});
+
+test("タイムスタンプ・スラッシュコマンドへのリンク・@everyone / @here だけの発言は訳さない", () => {
+  assert.equal(needsTranslation("<t:1700000000:R>", "ja"), false);
+  assert.equal(needsTranslation("<t:1700000000>", "ja"), false);
+  assert.equal(needsTranslation("</yomi set:123456>", "ja"), false);
+  assert.equal(needsTranslation("@everyone @here", "ja"), false);
+  assert.equal(needsTranslation("<t:1700000000:R> 집합", "ja"), true);
 });
 
 test("URL・メンション・絵文字だけの発言は訳さない", () => {
@@ -102,7 +110,19 @@ function fakeTranslator() {
   return { translator, calls };
 }
 
-function setup(content = "こんにちは") {
+// Discord API の「もうない」エラー（10008: Unknown Message）
+function unknownMessage(): DiscordAPIError {
+  return new DiscordAPIError(
+    { code: RESTJSONErrorCodes.UnknownMessage, message: "Unknown Message" },
+    RESTJSONErrorCodes.UnknownMessage,
+    404,
+    "GET",
+    "/channels/c1/messages/t1",
+    {},
+  );
+}
+
+function setup(content = "こんにちは", { ratePerMin = 10 } = {}) {
   const client = new EventEmitter() as EventEmitter & Record<string, unknown>;
   let reactions: { count: number; emoji: { id: null; name: string } }[] = [];
   const rest = {
@@ -120,12 +140,12 @@ function setup(content = "こんにちは") {
     author: { id: "author" },
     messageSnapshots: { first: () => undefined },
     inGuild: () => true,
-    guild: { members: { me: {} } },
+    guild: { members: { me: {} as object | null } },
     channel: {
       name: "general",
       isThread: () => false,
-      permissionsFor: () => ({ has: () => true }),
-      messages: { fetch: async () => ({}) },
+      permissionsFor: mock.fn(() => ({ has: () => true })),
+      messages: { fetch: mock.fn(async (_id: string): Promise<unknown> => ({})) },
     },
     reply: mock.fn(async () => ({ id: `t${++replies}` })),
     fetch: async () => message,
@@ -134,7 +154,7 @@ function setup(content = "こんにちは") {
   const index = new TranslationIndex(":memory:");
   new ReactionTranslator(client as never, translator, index, {
     maxChars: 1000,
-    ratePerMin: 10,
+    ratePerMin,
   }).register();
   const reaction = { emoji: { id: null, name: "🇰🇷" }, message };
   const user = { id: "u1", bot: false, partial: false };
@@ -144,7 +164,8 @@ function setup(content = "こんにちは") {
     message,
     calls,
     index,
-    add: () => client.emit(Events.MessageReactionAdd, reaction, user),
+    reaction,
+    add: (by = user) => client.emit(Events.MessageReactionAdd, reaction, by),
     remove: () => client.emit(Events.MessageReactionRemove, reaction, user),
     setReactions: (n: number) => {
       reactions = n > 0 ? [{ count: n, emoji: { id: null, name: "🇰🇷" } }] : [];
@@ -296,4 +317,254 @@ test("編集が重なっても最後の本文の訳文で直す", async () => {
   const [, options] = t.rest.patch.mock.calls[0]!.arguments as [string, { body: { content: string } }];
   assert.match(options.body.content, /편집B/);
   assert.equal(t.index.get("m1", "ko")?.sourceText, "編集B");
+});
+
+test("最初の翻訳を待つ間に編集されたら、訳し終えたあと最後の本文で直す", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  // 対応がまだないので、この編集は見送られる
+  t.message.content = "さようなら";
+  t.client.emit(Events.MessageUpdate, null, t.message);
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  assert.equal(t.calls.length, 2);
+  assert.equal(t.calls[1]!.text, "さようなら");
+  t.calls[1]!.resolve("안녕히 가세요");
+  await flush();
+
+  assert.equal(t.rest.patch.mock.callCount(), 1);
+  const [, options] = t.rest.patch.mock.calls[0]!.arguments as [string, { body: { content: string } }];
+  assert.match(options.body.content, /안녕히 가세요/);
+  assert.equal(t.index.get("m1", "ko")?.sourceText, "さようなら");
+});
+
+test("外して翻訳を消している間に付け直されたら、訳し直して国旗だけが残らないようにする", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  let finishDelete!: () => void;
+  t.rest.delete.mock.mockImplementationOnce(
+    () => new Promise((resolve) => (finishDelete = () => resolve(undefined))),
+  );
+  t.setReactions(0);
+  t.remove();
+  await flush();
+  t.setReactions(1);
+  t.add(); // 消し終わる前に付け直す（まだ翻訳があるので、この時点では何もしない）
+  await flush();
+  finishDelete();
+  await flush();
+
+  // 訳し直しはキャッシュから出るので、翻訳エンジンは 1 回だけ
+  assert.equal(t.calls.length, 1);
+  assert.equal(t.message.reply.mock.callCount(), 2);
+  assert.equal(t.index.get("m1", "ko")?.translationId, "t2");
+});
+
+test("国旗が外れたかを確かめる API が失敗したら、翻訳は消さずにログに残す", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  t.rest.get.mock.mockImplementationOnce(async () => {
+    throw new Error("503 Service Unavailable");
+  });
+  const error = mock.method(console, "error", () => {});
+  try {
+    t.remove();
+    await flush();
+    assert.equal(error.mock.callCount(), 1);
+  } finally {
+    error.mock.restore();
+  }
+  assert.equal(t.rest.delete.mock.callCount(), 0);
+  assert.equal(t.index.get("m1", "ko")?.translationId, "t1");
+});
+
+test("1 人分の回数を使い切ったら訳さない", async () => {
+  const t = setup("こんにちは", { ratePerMin: 1 });
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    t.add();
+    await flush();
+    t.calls[0]!.resolve("안녕하세요");
+    await flush();
+    // 別の発言の扱いにするため、対応とキャッシュに当たらないよう ID を変える
+    t.message.id = "m2";
+    t.add();
+    await flush();
+  } finally {
+    warn.mock.restore();
+  }
+  assert.equal(t.calls.length, 1);
+  assert.equal(t.message.reply.mock.callCount(), 1);
+});
+
+test("全員の合計で 1 人分の 3 倍を超えたら訳さない", async () => {
+  const t = setup("こんにちは", { ratePerMin: 1 });
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    for (let i = 1; i <= 4; i++) {
+      t.message.id = `m${i}`;
+      t.add({ id: `u${i}`, bot: false, partial: false });
+      await flush();
+      t.calls.at(-1)?.resolve("안녕하세요");
+      await flush();
+    }
+  } finally {
+    warn.mock.restore();
+  }
+  assert.equal(t.calls.length, 3);
+  assert.equal(t.message.reply.mock.callCount(), 3);
+});
+
+test("返信する権限がなければ翻訳エンジンを呼ばない", async () => {
+  const t = setup();
+  t.message.channel.permissionsFor.mock.mockImplementation(() => ({ has: () => false }));
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    t.add();
+    await flush();
+  } finally {
+    warn.mock.restore();
+  }
+  assert.equal(t.calls.length, 0);
+});
+
+test("Bot 自身のメンバー情報が取れなければ、権限がないものとして訳さない", async () => {
+  const t = setup();
+  t.message.guild.members.me = null;
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    t.add();
+    await flush();
+  } finally {
+    warn.mock.restore();
+  }
+  assert.equal(t.calls.length, 0);
+});
+
+test("自分の投稿には国旗を付けても訳さない", async () => {
+  const t = setup();
+  t.message.author = { id: "bot" };
+  t.add();
+  await flush();
+  assert.equal(t.calls.length, 0);
+});
+
+test("Bot が止まっている間に翻訳が消されていたら、付け直しで投稿し直す", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  // 外したことは見えないまま、翻訳メッセージだけが消えている
+  t.message.channel.messages.fetch.mock.mockImplementationOnce(async () => {
+    throw unknownMessage();
+  });
+  t.add();
+  await flush();
+  assert.equal(t.message.reply.mock.callCount(), 2);
+  assert.equal(t.index.get("m1", "ko")?.translationId, "t2");
+});
+
+test("翻訳が残っていれば、付け直しても投稿し直さない", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  t.add({ id: "u2", bot: false, partial: false });
+  await flush();
+  assert.equal(t.message.reply.mock.callCount(), 1);
+});
+
+test("翻訳中に元の発言が消えたら投稿せず、付け直しても復活しない", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.client.emit(Events.MessageDelete, t.message);
+  await flush();
+  t.add(); // 消えた取り消しは、付け直しでは撤回しない
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  assert.equal(t.message.reply.mock.callCount(), 0);
+  assert.equal(t.index.get("m1", "ko"), undefined);
+});
+
+test("返信を投稿している間に元の発言が消えたら、投稿した翻訳を消す", async () => {
+  const t = setup();
+  let finishReply!: () => void;
+  t.message.reply.mock.mockImplementationOnce(
+    () => new Promise((resolve) => (finishReply = () => resolve({ id: "t1" }))),
+  );
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  t.client.emit(Events.MessageDelete, t.message);
+  await flush();
+  finishReply();
+  await flush();
+  assert.equal(t.rest.delete.mock.callCount(), 1);
+  assert.equal(t.index.get("m1", "ko"), undefined);
+});
+
+for (const [name, emit] of [
+  ["リアクションが全部消された（RemoveAll）", (t: ReturnType<typeof setup>) =>
+    t.client.emit(Events.MessageReactionRemoveAll, t.message, new Map())],
+  ["その絵文字が全部消された（RemoveEmoji）", (t: ReturnType<typeof setup>) =>
+    t.client.emit(Events.MessageReactionRemoveEmoji, t.reaction)],
+  ["まとめて削除された（BulkDelete）", (t: ReturnType<typeof setup>) =>
+    t.client.emit(Events.MessageBulkDelete, new Map([[t.message.id, t.message]]), {})],
+] as const) {
+  test(`${name}ら翻訳も消す`, async () => {
+    const t = setup();
+    t.add();
+    await flush();
+    t.calls[0]!.resolve("안녕하세요");
+    await flush();
+    t.setReactions(0);
+    emit(t);
+    await flush();
+    assert.equal(t.rest.delete.mock.callCount(), 1);
+    assert.equal(t.index.get("m1", "ko"), undefined);
+  });
+}
+
+test("編集で訳先の言語の文になったら翻訳を消す", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  t.message.content = "안녕";
+  t.client.emit(Events.MessageUpdate, null, t.message);
+  await flush();
+  assert.equal(t.calls.length, 1);
+  assert.equal(t.rest.delete.mock.callCount(), 1);
+  assert.equal(t.index.get("m1", "ko"), undefined);
+});
+
+test("直そうとした翻訳が消されていたら、対応を忘れる", async () => {
+  const t = setup();
+  t.add();
+  await flush();
+  t.calls[0]!.resolve("안녕하세요");
+  await flush();
+  t.rest.patch.mock.mockImplementationOnce(async () => {
+    throw unknownMessage();
+  });
+  t.message.content = "さようなら";
+  t.client.emit(Events.MessageUpdate, null, t.message);
+  await flush();
+  t.calls[1]!.resolve("안녕히 가세요");
+  await flush();
+  assert.equal(t.index.get("m1", "ko"), undefined);
 });

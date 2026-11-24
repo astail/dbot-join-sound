@@ -26,6 +26,10 @@ const DEFAULT_MAX_CHARS = 1000;
 // Discord のメッセージの上限（Nitro で 4000 字）。これより長い本文は来ない
 const MAX_MAX_CHARS = 4000;
 const DEFAULT_RATE_PER_MIN = 10;
+// 全員の合計は 1 人分の何倍までか。長い発言を次々と訳させて、DeepL の無料枠や
+// Claude の料金を一人で使い切れないようにする
+const TOTAL_RATE_MULTIPLIER = 3;
+const TOTAL_RATE_KEY = "*";
 
 export function resolveMaxChars(value: string | undefined): number {
   if (value === undefined || value.trim() === "") return DEFAULT_MAX_CHARS;
@@ -51,8 +55,10 @@ export function resolveRatePerMin(value: string | undefined): number {
 
 const HANGUL = /[가-힣ᄀ-ᇿ㄰-㆏]/;
 const KANA = /[぀-ヿㇰ-ㇿｦ-ﾟ]/;
-// カスタム絵文字・メンション・URL。訳す文字として数えない
-const NON_TEXT_TOKEN = /<a?:\w+:\d+>|<(?:[@#]|@!|@&)\d+>|https?:\/\/\S+/g;
+// カスタム絵文字・メンション・URL・タイムスタンプ・スラッシュコマンドへのリンク・
+// @everyone / @here。訳す文字として数えない
+const NON_TEXT_TOKEN =
+  /<a?:\w+:\d+>|<(?:[@#]|@!|@&)\d+>|https?:\/\/\S+|<t:-?\d+(?::[a-zA-Z])?>|<\/[^:>]+:\d+>|@(?:everyone|here)/g;
 
 /**
  * 文字種から韓国語か日本語かを決める。ハングルだけなら ko、仮名だけなら ja。
@@ -166,12 +172,14 @@ export type ReactionTranslatorOptions = { maxChars: number; ratePerMin: number }
 export class ReactionTranslator {
   // 処理中の翻訳（`${messageId}:${lang}`）。取り消されたら投稿しない・投稿後に消す
   private readonly pending = new Map<string, Job>();
-  // リアクションを付けた通し番号（`${messageId}:${lang}` → 最後に付けたとき）。削除の判定との行き違いを見分ける
-  private readonly lastAdd = new Map<string, { seq: number; at: number }>();
+  // リアクションを付けた通し番号と付けた人（`${messageId}:${lang}` → 最後に付けたとき）。
+  // 削除の判定との行き違いを見分け、行き違ったら付けた人の分として訳し直す
+  private readonly lastAdd = new Map<string, { seq: number; at: number; user: User | PartialUser }>();
   private addSeq = 0;
   // 編集中の最新の本文（messageId → 本文）。古い編集の訳文で上書きしないため
   private readonly latestEdit = new Map<string, string>();
   private readonly limiter: RateLimiter;
+  private readonly totalLimiter: RateLimiter;
 
   constructor(
     private readonly client: Client,
@@ -183,6 +191,7 @@ export class ReactionTranslator {
     },
   ) {
     this.limiter = new RateLimiter(options.ratePerMin, 60_000);
+    this.totalLimiter = new RateLimiter(options.ratePerMin * TOTAL_RATE_MULTIPLIER, 60_000);
   }
 
   register(): void {
@@ -229,6 +238,12 @@ export class ReactionTranslator {
       );
       return null;
     }
+    if (!this.totalLimiter.tryTake(TOTAL_RATE_KEY)) {
+      console.warn(
+        `reaction translation: skipped because all users reached ${this.options.ratePerMin * TOTAL_RATE_MULTIPLIER} per minute`,
+      );
+      return null;
+    }
     // 文字種で決められたときだけ元の言語を渡し、英語などは翻訳エンジンの判定に任せる
     const translated = (await this.translator.translate(text, { from: guessLang(text), to })).trim();
     if (translated) this.index.cacheTranslation(originalId, to, text, translated);
@@ -242,7 +257,7 @@ export class ReactionTranslator {
     const lang = emojiLang(reaction.emoji);
     if (!lang || user.bot) return;
     const key = `${reaction.message.id}:${lang}`;
-    this.markAdded(key);
+    this.markAdded(key, user);
     const running = this.pending.get(key);
     if (running) {
       // 処理中に外して付け直した。取り消しをやめる（元の発言が消えた取り消しはそのまま）
@@ -286,8 +301,8 @@ export class ReactionTranslator {
     const full = sourceText(message);
     if (!full || !needsTranslation(full, lang)) return;
     // 投稿できないチャンネルで翻訳の料金だけかからないよう、先に権限を確かめる
-    const me = message.guild.members.me ?? this.client.user!;
-    const permissions = message.channel.permissionsFor(me);
+    const me = message.guild.members.me;
+    const permissions = me && message.channel.permissionsFor(me);
     const send = message.channel.isThread()
       ? PermissionFlagsBits.SendMessagesInThreads
       : PermissionFlagsBits.SendMessages;
@@ -319,11 +334,14 @@ export class ReactionTranslator {
       return;
     }
     this.index.set(message.id, lang, { translationId: reply.id, sourceText: full });
+    // 翻訳を待つ間の編集は、対応がまだないので onMessageUpdate が見送っている。
+    // MessageUpdate は同じ Message を書き換えるので、本文が変わっていたらここで直す
+    if (sourceText(message) !== full) await this.onMessageUpdate(message);
   }
 
-  private markAdded(key: string): void {
+  private markAdded(key: string, user: User | PartialUser): void {
     const now = Date.now();
-    this.lastAdd.set(key, { seq: ++this.addSeq, at: now });
+    this.lastAdd.set(key, { seq: ++this.addSeq, at: now, user });
     if (this.lastAdd.size > 1_000) {
       for (const [k, v] of this.lastAdd) {
         if (now - v.at > RECENT_ADD_MS) this.lastAdd.delete(k);
@@ -343,14 +361,23 @@ export class ReactionTranslator {
     const seqAtCheck = this.addSeq;
     const data = (await this.client.rest
       .get(Routes.channelMessage(message.channelId, message.id))
-      .catch(() => null)) as APIMessage | null;
-    if (!data) return; // 元の発言が消えた。MessageDelete の側で消す
+      .catch((err: unknown) => {
+        // 元の発言が消えたときは MessageDelete の側で消す。それ以外の失敗はログに残す
+        if (isGone(err)) return null;
+        throw err;
+      })) as APIMessage | null;
+    if (!data) return;
     const remaining = (data.reactions ?? []).some(
       (r) => r.count > 0 && emojiLang(r.emoji) === lang,
     );
+    const readded = () => (this.lastAdd.get(key)?.seq ?? 0) > seqAtCheck;
     // 確かめている間に付け直されたら、取り直した件数は古いかもしれないので消さない
-    if (remaining || (this.lastAdd.get(key)?.seq ?? 0) > seqAtCheck) return;
+    if (remaining || readded()) return;
     await this.deleteTranslations(message, lang, "reaction");
+    // 消している間に付け直されると、その付け直しは「まだ翻訳がある」と見て何もせずに
+    // 終わっている。国旗だけが残らないよう、付けた人の分として訳し直す（訳文はキャッシュから出る）
+    const last = this.lastAdd.get(key);
+    if (last && readded()) await this.onReactionAdd(reaction, last.user);
   }
 
   private async onMessageDelete(message: Message | PartialMessage): Promise<void> {

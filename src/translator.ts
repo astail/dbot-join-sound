@@ -97,6 +97,11 @@ class ClaudeTranslator implements Translator {
       system: chatPrompt(options),
       messages: [{ role: "user", content: text }],
     });
+    // 安全のための打ち切り（refusal）や上限での打ち切りでは、途中までの文が返ることがある。
+    // 不完全な訳文を投稿しないよう、本文があっても捨てる
+    if (res.stop_reason === "refusal" || res.stop_reason === "max_tokens") {
+      throw new Error(`Claude の訳文が途中で止まりました（stop_reason: ${res.stop_reason}）`);
+    }
     // 考えた内容（thinking）が先頭に来ることがあるので、本文だけを拾う
     const translated = res.content
       .filter((block) => block.type === "text")
