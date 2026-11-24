@@ -47,6 +47,9 @@ export class TranslationIndex {
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      -- 書き込みのたびの fsync でイベントループ（音声の送出）を止めないため。WAL なら
+      -- 電源断で最後の書き込みを失うことはあっても DB は壊れない
+      PRAGMA synchronous = NORMAL;
       CREATE TABLE IF NOT EXISTS translations (
         original_id    TEXT    NOT NULL,
         lang           TEXT    NOT NULL,

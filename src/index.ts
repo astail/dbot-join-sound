@@ -71,10 +71,9 @@ function createClient(index: number): Client {
       GatewayIntentBits.MessageContent,
       ...(translatesReactions ? [GatewayIntentBits.GuildMessageReactions] : []),
     ],
-    // 起動より前の発言（キャッシュにないメッセージ）へのリアクションや削除も受け取るため
-    partials: translatesReactions
-      ? [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User]
-      : [],
+    // 起動より前の発言（キャッシュにないメッセージ）へのリアクションや削除も受け取るため。
+    // DM は受け取らないので Partials.Channel は要らない
+    partials: translatesReactions ? [Partials.Message, Partials.Reaction, Partials.User] : [],
     // ClientReady で設定すると再接続のたびに消えるため、IDENTIFY に載せる
     presence: {
       activities: [{ name: commit, type: ActivityType.Custom, state: commit }],
