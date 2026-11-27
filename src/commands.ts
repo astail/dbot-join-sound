@@ -5,7 +5,14 @@ import {
   type Interaction,
 } from "discord.js";
 import { readChannels, writeChannels } from "./chat.js";
-import { readSpeakers, voiceTranslation, writeSpeakers, type Speakers } from "./k2j.js";
+import {
+  readSpeakers,
+  readTriggers,
+  voiceTranslation,
+  writeSpeakers,
+  writeTriggers,
+  type Speakers,
+} from "./k2j.js";
 import { LANG_NAMES, otherLang, type Lang } from "./translator.js";
 import { hasSessionInGuild } from "./voice.js";
 import {
@@ -102,7 +109,23 @@ export const commands = [
         ),
     )
     .addSubcommand((sub) =>
-      sub.setName("list").setDescription("話者の一覧を表示します"),
+      sub
+        .setName("trigger-add")
+        .setDescription("この人が Bot と同じ通話にいるときだけ字幕を出します")
+        .addUserOption((option) =>
+          option.setName("user").setDescription("字幕の条件にする人").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("trigger-remove")
+        .setDescription("字幕の条件から外します")
+        .addUserOption((option) =>
+          option.setName("user").setDescription("字幕の条件から外す人").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("話者と字幕の条件にしている人の一覧を表示します"),
     )
     .addSubcommand((sub) =>
       sub.setName("status").setDescription("音声翻訳の設定と処理した件数を表示します"),
@@ -129,6 +152,10 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
       await addSpeaker(interaction);
     } else if (subcommand === "remove") {
       await removeSpeaker(interaction);
+    } else if (subcommand === "trigger-add") {
+      await addTrigger(interaction);
+    } else if (subcommand === "trigger-remove") {
+      await removeTrigger(interaction);
     } else if (subcommand === "list") {
       await listSpeakers(interaction);
     } else if (subcommand === "status") {
@@ -264,6 +291,15 @@ function speakerCounts(speakers: Speakers): string {
   return `韓国語話者 ${ko} 人 / 日本語話者 ${ids.length - ko} 人`;
 }
 
+// 字幕の条件にしている人がいないと字幕は出ないので、話者を指定したときや一覧でそう伝える
+const NO_TRIGGERS =
+  "字幕の条件にしている人がいないので、字幕は出しません（`/k2j trigger-add` で指定）。";
+
+function triggerCount(): string {
+  const count = readTriggers().length;
+  return count === 0 ? "なし（字幕は出しません）" : `${count} 人`;
+}
+
 async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<void> {
   const user = interaction.options.getUser("user", true);
   const lang = (interaction.options.getString("lang") ?? "ko") as Lang;
@@ -288,7 +324,8 @@ async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<voi
     content:
       `<@${user.id}> を${LANG_NAMES[lang]}話者にしました${changed}。` +
       `Bot がいる通話での発話を${LANG_NAMES[otherLang(lang)]}の字幕にします。\n` +
-      `現在: ${speakerCounts(speakers)}`,
+      `現在: ${speakerCounts(speakers)}` +
+      (readTriggers().length === 0 ? `\n${NO_TRIGGERS}` : ""),
     allowedMentions: NO_MENTIONS,
   });
 }
@@ -324,11 +361,61 @@ async function listSpeakers(interaction: ChatInputCommandInteraction): Promise<v
         ];
   };
   const lines = [...section("ko"), ...section("ja")];
-  if (lines.length === 0) {
-    await interaction.reply("話者はまだ指定されていません。");
+  if (lines.length === 0) lines.push("話者はまだ指定されていません。");
+  const triggers = readTriggers();
+  lines.push(
+    ...(triggers.length === 0
+      ? [NO_TRIGGERS]
+      : [
+          `字幕の条件（誰かが Bot と同じ通話にいるときだけ字幕を出す、${triggers.length} 人）:`,
+          ...triggers.map((id) => `- <@${id}>`),
+        ]),
+  );
+  await interaction.reply({ content: lines.join("\n"), allowedMentions: NO_MENTIONS });
+}
+
+async function addTrigger(interaction: ChatInputCommandInteraction): Promise<void> {
+  const user = interaction.options.getUser("user", true);
+  if (user.bot) {
+    await interaction.reply("Bot は字幕の条件にできません。");
     return;
   }
-  await interaction.reply({ content: lines.join("\n"), allowedMentions: NO_MENTIONS });
+  const triggers = readTriggers();
+  if (triggers.includes(user.id)) {
+    await interaction.reply({
+      content: `<@${user.id}> はすでに字幕の条件にしています。`,
+      allowedMentions: NO_MENTIONS,
+    });
+    return;
+  }
+  triggers.push(user.id);
+  await writeTriggers(triggers);
+  await interaction.reply({
+    content:
+      `<@${user.id}> を字幕の条件にしました。` +
+      `条件にした人の誰かが Bot と同じ通話にいるときだけ字幕を出します（現在 ${triggers.length} 人）。`,
+    allowedMentions: NO_MENTIONS,
+  });
+}
+
+async function removeTrigger(interaction: ChatInputCommandInteraction): Promise<void> {
+  const user = interaction.options.getUser("user", true);
+  const triggers = readTriggers();
+  if (!triggers.includes(user.id)) {
+    await interaction.reply({
+      content: `<@${user.id}> は字幕の条件にしていません。`,
+      allowedMentions: NO_MENTIONS,
+    });
+    return;
+  }
+  const rest = triggers.filter((id) => id !== user.id);
+  await writeTriggers(rest);
+  await interaction.reply({
+    content:
+      `<@${user.id}> を字幕の条件から外しました（現在 ${rest.length} 人）。` +
+      (rest.length === 0 ? `\n${NO_TRIGGERS}` : ""),
+    allowedMentions: NO_MENTIONS,
+  });
 }
 
 async function showK2jStatus(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -346,6 +433,7 @@ async function showK2jStatus(interaction: ChatInputCommandInteraction): Promise<
   const lines = [
     `翻訳: ${pipeline.translator.name} / 文字起こし: OpenAI (${sttModel})`,
     `話者: ${speakerCounts(readSpeakers())}`,
+    `字幕の条件: ${triggerCount()}`,
     `このサーバー: 字幕 ${stats.processed} 件 / 捨てた発話 ${stats.dropped} 件 / 失敗 ${stats.errors} 件` +
       (stats.lastLatencyMs !== null
         ? ` / 直近の遅延 ${(stats.lastLatencyMs / 1000).toFixed(1)} 秒`

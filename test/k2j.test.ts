@@ -24,13 +24,17 @@ const {
   configureVoiceTranslation,
   listenForSpeech,
   readSpeakers,
+  readTriggers,
   voiceTranslation,
   writeSpeakers,
+  writeTriggers,
 } = await import("../src/k2j.ts");
 const { handleInteraction } = await import("../src/commands.ts");
 
-// 話者の一覧は sounds/k2j.json ひとつを共有するので、触るテストはこのファイルにまとめて毎回消す
+// 話者の一覧は sounds/k2j.json、字幕の条件は sounds/k2j-triggers.json ひとつずつを共有するので、
+// 触るテストはこのファイルにまとめて毎回消す
 const speakersPath = join(soundsDir, "k2j.json");
+const triggersPath = join(soundsDir, "k2j-triggers.json");
 
 beforeEach(() => {
   inCall = true;
@@ -41,6 +45,8 @@ afterEach(async () => {
   // 一覧はメモリにも持つので、ファイルを消す前に空にしておく
   await writeSpeakers({});
   await unlink(speakersPath).catch(() => {});
+  await writeTriggers([]);
+  await unlink(triggersPath).catch(() => {});
 });
 
 const flush = async () => {
@@ -318,6 +324,51 @@ test("/k2j add は言語を省略すると韓国語話者にし、通知は飛�
   assert.match(again!.content, /すでに韓国語話者です/);
 });
 
+test("/k2j add は字幕の条件にしている人がいなければ、字幕が出ないことも伝える", async () => {
+  const [none] = await runK2j("add", { id: "100" });
+  assert.match(none!.content, /字幕の条件にしている人がいないので、字幕は出しません/);
+
+  await writeTriggers(["300"]);
+  const [some] = await runK2j("add", { id: "101" });
+  assert.doesNotMatch(some!.content, /字幕は出しません/);
+});
+
+test("/k2j trigger-add と trigger-remove で字幕の条件にする人を指定・解除する", async () => {
+  const [added] = await runK2j("trigger-add", { id: "300" });
+  assert.match(added!.content, /<@300> を字幕の条件にしました。.*（現在 1 人）/);
+  assert.deepEqual(added!.allowedMentions, { parse: [] });
+  assert.deepEqual(readTriggers(), ["300"]);
+
+  const [again] = await runK2j("trigger-add", { id: "300" });
+  assert.match(again!.content, /すでに字幕の条件にしています/);
+  await runK2j("trigger-add", { id: "301" });
+  assert.deepEqual(readTriggers(), ["300", "301"]);
+
+  const [removed] = await runK2j("trigger-remove", { id: "300" });
+  assert.equal(removed!.content, "<@300> を字幕の条件から外しました（現在 1 人）。");
+  const [last] = await runK2j("trigger-remove", { id: "301" });
+  assert.match(last!.content, /（現在 0 人）。\n字幕の条件にしている人がいないので、字幕は出しません/);
+  assert.deepEqual(readTriggers(), []);
+
+  const [missing] = await runK2j("trigger-remove", { id: "999" });
+  assert.match(missing!.content, /字幕の条件にしていません/);
+});
+
+test("/k2j trigger-add で Bot は指定できない", async () => {
+  const [reply] = await runK2j("trigger-add", { id: "200", bot: true });
+  assert.match(reply!.content, /Bot は字幕の条件にできません/);
+  assert.deepEqual(readTriggers(), []);
+});
+
+test("字幕の条件にする人の一覧を保存して読み出す", async () => {
+  assert.deepEqual(readTriggers(), []);
+  await writeTriggers(["300", "301"]);
+  assert.deepEqual(readTriggers(), ["300", "301"]);
+  // 渡した一覧を書き換えても、持っている一覧は変わらない
+  readTriggers().push("302");
+  assert.deepEqual(readTriggers(), ["300", "301"]);
+});
+
 test("/k2j add lang:ja で日本語話者にし、別の言語の指定は置き換える", async () => {
   const [reply] = await runK2j("add", { id: "100" }, "ja");
   assert.match(reply!.content, /<@100> を日本語話者にしました。.*韓国語の字幕にします/);
@@ -344,11 +395,18 @@ test("/k2j remove で指定を外す", async () => {
   assert.match(missing!.content, /指定されていません/);
 });
 
-test("/k2j list で言語ごとに話者の一覧を出す", async () => {
+test("/k2j list で言語ごとに話者の一覧と、字幕の条件にしている人を出す", async () => {
   const [empty] = await runK2j("list");
-  assert.equal(empty!.content, "話者はまだ指定されていません。");
+  assert.equal(
+    empty!.content,
+    [
+      "話者はまだ指定されていません。",
+      "字幕の条件にしている人がいないので、字幕は出しません（`/k2j trigger-add` で指定）。",
+    ].join("\n"),
+  );
 
   await writeSpeakers({ "100": "ko", "101": "ja", "102": "ko" });
+  await writeTriggers(["300"]);
   const [reply] = await runK2j("list");
   assert.equal(
     reply!.content,
@@ -358,6 +416,8 @@ test("/k2j list で言語ごとに話者の一覧を出す", async () => {
       "- <@102>",
       "日本語話者 → 韓国語（1 人）:",
       "- <@101>",
+      "字幕の条件（誰かが Bot と同じ通話にいるときだけ字幕を出す、1 人）:",
+      "- <@300>",
     ].join("\n"),
   );
   assert.deepEqual(reply!.allowedMentions, { parse: [] });
@@ -380,10 +440,15 @@ test("/k2j status は無効なら理由を、有効なら設定と件数を出�
     [
       "翻訳: DeepL / 文字起こし: OpenAI (gpt-4o-mini-transcribe)",
       "話者: 韓国語話者 1 人 / 日本語話者 0 人",
+      "字幕の条件: なし（字幕は出しません）",
       "このサーバー: 字幕 0 件 / 捨てた発話 0 件 / 失敗 0 件",
       "DeepL の使用量: 10 / 500,000 文字",
     ].join("\n"),
   );
+
+  await writeTriggers(["300", "301"]);
+  const [withTriggers] = await runK2j("status");
+  assert.match(withTriggers!.content, /\n字幕の条件: 2 人\n/);
 });
 
 test("Bot が通話にいないときは /k2j も使えない", async () => {
@@ -567,9 +632,17 @@ function fakeCall() {
       }),
     },
   };
-  const guild = { id: "g1", channels: { cache: { get: () => undefined } } };
+  // 通話にいる人（ユーザー ID → いる VC）。既定では host が Bot と同じ vc-1 にいる
+  const voiceStates = new Map<string, { channelId: string | null }>([
+    ["host", { channelId: "vc-1" }],
+  ]);
+  const guild = {
+    id: "g1",
+    channels: { cache: { get: () => undefined } },
+    voiceStates: { cache: voiceStates },
+  };
   const session = { channelId: "vc-1", destroyed: false };
-  return { connection, guild, session, speaking, streams };
+  return { connection, guild, session, speaking, streams, voiceStates };
 }
 
 // 文字起こしの API（OpenAI）を呼ばないよう、空の結果を返させる
@@ -589,6 +662,7 @@ async function withSilentTranscription(run: () => Promise<void>): Promise<void> 
 test("受信が失敗したら、話し続けていてもすぐには拾い直さず、ログも人ごとに間引く", async () => {
   configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
   await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["host"]);
   const call = fakeCall();
   listenForSpeech(call.connection as never, call.guild as never, call.session);
   const error = mock.method(console, "error", () => {});
@@ -614,6 +688,7 @@ test("受信が失敗したら、話し続けていてもすぐには拾い直�
 test("30 秒で区切ったあとも話し続けていれば、続きを拾う", async () => {
   configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
   await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["host"]);
   const call = fakeCall();
   listenForSpeech(call.connection as never, call.guild as never, call.session);
   await withSilentTranscription(async () => {
@@ -633,9 +708,92 @@ test("30 秒で区切ったあとも話し続けていれば、続きを拾う",
 test("話者に指定していない人の声は受け取らない", async () => {
   configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
   await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["host"]);
   const call = fakeCall();
   listenForSpeech(call.connection as never, call.guild as never, call.session);
   call.speaking.emit("start", "u2");
   await flush();
   assert.equal(call.connection.receiver.subscribe.mock.callCount(), 0);
+});
+
+test("字幕の条件にしている人がいなければ、話者の声も受け取らない", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  call.speaking.emit("start", "u1");
+  await flush();
+  assert.equal(call.connection.receiver.subscribe.mock.callCount(), 0);
+});
+
+test("字幕の条件にした人の誰かが Bot と同じ通話にいるときだけ、話者の声を受け取る", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["t1", "t2"]);
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  const subscribed = () => call.connection.receiver.subscribe.mock.callCount();
+
+  // 条件にしていない人（host）しかいない・条件の人が別の VC にいる・通話にいない
+  call.voiceStates.set("t1", { channelId: "vc-2" });
+  call.voiceStates.set("t2", { channelId: null });
+  call.speaking.emit("start", "u1");
+  await flush();
+  assert.equal(subscribed(), 0);
+
+  // 条件の人のうち 1 人が Bot と同じ VC に来たら受け取る
+  call.voiceStates.set("t2", { channelId: "vc-1" });
+  call.speaking.emit("start", "u1");
+  await flush();
+  assert.equal(subscribed(), 1);
+  call.streams[0]!.destroy();
+  await flush();
+
+  // Bot が vc-2 へ移されたら、移動先にいる人で判断する
+  call.voiceStates.delete("t2");
+  call.session.channelId = "vc-2";
+  call.speaking.emit("start", "u1");
+  await flush();
+  assert.equal(subscribed(), 2);
+  call.streams[1]!.destroy();
+  await flush();
+});
+
+test("字幕の条件にした人が、話している間に通話を抜けたら、その発話は文字起こしに回さない", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["host"]);
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  const original = globalThis.fetch;
+  const transcribe = mock.fn(
+    async () =>
+      new Response(JSON.stringify({ text: "" }), {
+        headers: { "content-type": "application/json" },
+      }),
+  );
+  globalThis.fetch = transcribe as unknown as typeof fetch;
+  // 0.6 秒話して黙る（leave を渡すと、話し終える前にその人を通話から抜けさせる）
+  // 文字起こしに回るまで最大 1 秒待つ（回らないほうを確かめるときは 1 秒待ちきる）
+  const speak = async (stream: Readable, leave?: string) => {
+    const before = transcribe.mock.callCount();
+    for (let i = 0; i < 30; i++) stream.push(opusPacket);
+    await flush();
+    if (leave) call.voiceStates.delete(leave);
+    stream.push(null);
+    for (let i = 0; i < 100 && transcribe.mock.callCount() === before; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  try {
+    call.speaking.emit("start", "u1");
+    await speak(call.streams[0]!);
+    assert.equal(transcribe.mock.callCount(), 1);
+
+    call.speaking.emit("start", "u1");
+    await speak(call.streams[1]!, "host");
+    assert.equal(transcribe.mock.callCount(), 1);
+  } finally {
+    globalThis.fetch = original;
+  }
 });
