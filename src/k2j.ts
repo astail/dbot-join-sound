@@ -263,10 +263,12 @@ export class VoicePipeline {
  * 指定した人の発話を 1 つ分受け取り、48kHz ステレオの PCM にして返す。truncated は、
  * 上限の長さで区切った（まだ話し続けているかもしれない）ことを示す。
  * Discord は人ごとに別の Opus の流れを送ってくるので、話者を聞き分ける必要はない。
+ * 受け取っている間に keep が false を返したら、その発話を捨てて（空の PCM で）すぐに終える。
  */
 export function captureUtterance(
   receiver: Pick<VoiceReceiver, "subscribe">,
   userId: string,
+  keep: () => boolean = () => true,
 ): Promise<{ pcm: Buffer; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     const opus = receiver.subscribe(userId, {
@@ -300,6 +302,12 @@ export function captureUtterance(
     };
 
     decoder.on("data", (chunk: Buffer) => {
+      if (!keep()) {
+        chunks.length = 0;
+        total = 0;
+        finish();
+        return;
+      }
       chunks.push(chunk);
       total += chunk.length;
       if (total >= maxBytes) finish(true);
@@ -412,11 +420,13 @@ export function listenForSpeech(
     }
     capturing.add(userId);
     let truncated = false;
-    captureUtterance(connection.receiver, userId)
+    // 受け取っている間も条件の人がいるかを見て、いなくなったらその発話を捨てる。
+    // あとで戻ってきても、誰もいなかった間の声を OpenAI に送らないように
+    captureUtterance(connection.receiver, userId, triggerInCall)
       .then((captured) => {
         truncated = captured.truncated;
         // 話している間に指定が変わったときのため、言語は話し終えた時点で引き直す。
-        // 条件にした人が話している間に抜けたら、その発話も文字起こしに回さない
+        // 黙っている間（声が届かない間）に条件の人が抜けたときも、文字起こしに回さない
         const lang = readSpeakers()[userId];
         if (!session.destroyed && lang && captured.pcm.length > 0 && triggerInCall()) {
           active.pipeline.handleUtterance(guild.id, userId, captured.pcm, lang, out);

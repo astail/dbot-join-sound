@@ -111,7 +111,9 @@ export const commands = [
     .addSubcommand((sub) =>
       sub
         .setName("trigger-add")
-        .setDescription("この人が Bot と同じ通話にいるときだけ字幕を出します")
+        .setDescription(
+          "字幕の条件にする人を足します（条件の人の誰かが Bot と同じ通話にいるときだけ字幕を出す）",
+        )
         .addUserOption((option) =>
           option.setName("user").setDescription("字幕の条件にする人").setRequired(true),
         ),
@@ -295,11 +297,6 @@ function speakerCounts(speakers: Speakers): string {
 const NO_TRIGGERS =
   "字幕の条件にしている人がいないので、字幕は出しません（`/k2j trigger-add` で指定）。";
 
-function triggerCount(): string {
-  const count = readTriggers().length;
-  return count === 0 ? "なし（字幕は出しません）" : `${count} 人`;
-}
-
 async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<void> {
   const user = interaction.options.getUser("user", true);
   const lang = (interaction.options.getString("lang") ?? "ko") as Lang;
@@ -371,7 +368,20 @@ async function listSpeakers(interaction: ChatInputCommandInteraction): Promise<v
           ...triggers.map((id) => `- <@${id}>`),
         ]),
   );
-  await interaction.reply({ content: lines.join("\n"), allowedMentions: NO_MENTIONS });
+  // /yomi list と同じく、2000 文字の上限に収まるところまで出す
+  const shown: string[] = [];
+  let length = 0;
+  for (const line of lines) {
+    if (length + line.length + 1 > MAX_LIST_CHARS) break;
+    shown.push(line);
+    length += line.length + 1;
+  }
+  const omitted = lines.length - shown.length;
+  await interaction.reply({
+    content:
+      shown.join("\n") + (omitted > 0 ? `\nほか ${omitted} 行は長さの都合で省略しました。` : ""),
+    allowedMentions: NO_MENTIONS,
+  });
 }
 
 async function addTrigger(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -430,10 +440,11 @@ async function showK2jStatus(interaction: ChatInputCommandInteraction): Promise<
   await interaction.deferReply();
   const { pipeline, sttModel } = active;
   const stats = pipeline.statsFor(interaction.guildId ?? "");
+  const triggers = readTriggers().length;
   const lines = [
     `翻訳: ${pipeline.translator.name} / 文字起こし: OpenAI (${sttModel})`,
     `話者: ${speakerCounts(readSpeakers())}`,
-    `字幕の条件: ${triggerCount()}`,
+    `字幕の条件: ${triggers === 0 ? "なし（字幕は出しません）" : `${triggers} 人`}`,
     `このサーバー: 字幕 ${stats.processed} 件 / 捨てた発話 ${stats.dropped} 件 / 失敗 ${stats.errors} 件` +
       (stats.lastLatencyMs !== null
         ? ` / 直近の遅延 ${(stats.lastLatencyMs / 1000).toFixed(1)} 秒`

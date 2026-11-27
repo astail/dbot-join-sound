@@ -423,6 +423,15 @@ test("/k2j list で言語ごとに話者の一覧と、字幕の条件にして�
   assert.deepEqual(reply!.allowedMentions, { parse: [] });
 });
 
+test("/k2j list は 2000 文字の上限に収まらない分を省略する", async () => {
+  const speakers: Record<string, "ko"> = {};
+  for (let i = 0; i < 100; i++) speakers[`1000000000000000${String(i).padStart(2, "0")}`] = "ko";
+  await writeSpeakers(speakers);
+  const [reply] = await runK2j("list");
+  assert.ok(reply!.content.length <= 2000);
+  assert.match(reply!.content, /\nほか \d+ 行は長さの都合で省略しました。$/);
+});
+
 test("/k2j status は無効なら理由を、有効なら設定と件数を出す", async () => {
   const [disabled] = await runK2j("status");
   assert.match(disabled!.content, /止まっています/);
@@ -600,6 +609,22 @@ test("話している途中に接続が破棄されても（close だけで終�
   assert.equal(result.pcm.length, 5 * 960 * 4);
 });
 
+test("受け取っている間に keep が false になったら、その発話を捨てて受信を終える", async () => {
+  const stream = receiveStream();
+  let keep = true;
+  const capture = captureUtterance({ subscribe: () => stream as never }, "u1", () => keep);
+  for (let i = 0; i < 5; i++) stream.push(opusPacket);
+  await flush();
+  keep = false;
+  stream.push(opusPacket);
+  const result = await settle(capture);
+  assert.notEqual(result, "timeout");
+  if (result === "timeout") return;
+  assert.equal(result.pcm.length, 0);
+  assert.equal(result.truncated, false);
+  assert.equal(stream.destroyed, true);
+});
+
 test("受信が失敗して何も受け取れていなければ、失敗として返す", async () => {
   const stream = receiveStream();
   const capture = captureUtterance({ subscribe: () => stream as never }, "u1");
@@ -645,17 +670,30 @@ function fakeCall() {
   return { connection, guild, session, speaking, streams, voiceStates };
 }
 
-// 文字起こしの API（OpenAI）を呼ばないよう、空の結果を返させる
-async function withSilentTranscription(run: () => Promise<void>): Promise<void> {
+// 文字起こしの API（OpenAI）を呼ばないよう、空の結果を返させる。run には呼ばれた回数を数えるモックを渡す
+async function withSilentTranscription(
+  run: (transcribe: { mock: { callCount(): number } }) => Promise<void>,
+): Promise<void> {
   const original = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ text: "" }), {
-      headers: { "content-type": "application/json" },
-    })) as typeof fetch;
+  const transcribe = mock.fn(
+    async () =>
+      new Response(JSON.stringify({ text: "" }), {
+        headers: { "content-type": "application/json" },
+      }),
+  );
+  globalThis.fetch = transcribe as unknown as typeof fetch;
   try {
-    await run();
+    await run(transcribe);
   } finally {
     globalThis.fetch = original;
+  }
+}
+
+// 文字起こしがもう 1 回呼ばれるまで最大 1 秒待つ（呼ばれないほうを確かめるときは 1 秒待ちきる）
+async function waitForTranscription(transcribe: { mock: { callCount(): number } }): Promise<void> {
+  const before = transcribe.mock.callCount();
+  for (let i = 0; i < 100 && transcribe.mock.callCount() === before; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
@@ -765,27 +803,15 @@ test("字幕の条件にした人が、話している間に通話を抜けた�
   await writeTriggers(["host"]);
   const call = fakeCall();
   listenForSpeech(call.connection as never, call.guild as never, call.session);
-  const original = globalThis.fetch;
-  const transcribe = mock.fn(
-    async () =>
-      new Response(JSON.stringify({ text: "" }), {
-        headers: { "content-type": "application/json" },
-      }),
-  );
-  globalThis.fetch = transcribe as unknown as typeof fetch;
-  // 0.6 秒話して黙る（leave を渡すと、話し終える前にその人を通話から抜けさせる）
-  // 文字起こしに回るまで最大 1 秒待つ（回らないほうを確かめるときは 1 秒待ちきる）
-  const speak = async (stream: Readable, leave?: string) => {
-    const before = transcribe.mock.callCount();
-    for (let i = 0; i < 30; i++) stream.push(opusPacket);
-    await flush();
-    if (leave) call.voiceStates.delete(leave);
-    stream.push(null);
-    for (let i = 0; i < 100 && transcribe.mock.callCount() === before; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  };
-  try {
+  await withSilentTranscription(async (transcribe) => {
+    // 0.6 秒話して黙る（leave を渡すと、声が届き終えてから黙り終えるまでの間にその人を抜けさせる）
+    const speak = async (stream: Readable, leave?: string) => {
+      for (let i = 0; i < 30; i++) stream.push(opusPacket);
+      await flush();
+      if (leave) call.voiceStates.delete(leave);
+      stream.push(null);
+      await waitForTranscription(transcribe);
+    };
     call.speaking.emit("start", "u1");
     await speak(call.streams[0]!);
     assert.equal(transcribe.mock.callCount(), 1);
@@ -793,7 +819,55 @@ test("字幕の条件にした人が、話している間に通話を抜けた�
     call.speaking.emit("start", "u1");
     await speak(call.streams[1]!, "host");
     assert.equal(transcribe.mock.callCount(), 1);
-  } finally {
-    globalThis.fetch = original;
-  }
+  });
+});
+
+test("字幕の条件にした人が話の途中で抜けたら、話し終える前に戻ってきても、その発話は文字起こしに回さない", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["host"]);
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  await withSilentTranscription(async (transcribe) => {
+    call.speaking.emit("start", "u1");
+    const stream = call.streams[0]!;
+    for (let i = 0; i < 30; i++) stream.push(opusPacket);
+    await flush();
+    call.voiceStates.delete("host");
+    stream.push(opusPacket);
+    await flush();
+    // いなくなった時点で受信も終える
+    assert.equal(stream.destroyed, true);
+    call.voiceStates.set("host", { channelId: "vc-1" });
+    await waitForTranscription(transcribe);
+    assert.equal(transcribe.mock.callCount(), 0);
+  });
+});
+
+test("30 秒で区切った時点で字幕の条件にした人がいなければ、区切った分も回さず、続きも拾わない", async () => {
+  configureVoiceTranslation(fakeTranslator().translator, { OPENAI_API_KEY: "sk-test" });
+  await writeSpeakers({ u1: "ko" });
+  await writeTriggers(["host"]);
+  const call = fakeCall();
+  listenForSpeech(call.connection as never, call.guild as never, call.session);
+  await withSilentTranscription(async (transcribe) => {
+    call.speaking.users.set("u1", 1);
+    call.speaking.emit("start", "u1");
+    const stream = call.streams[0]!;
+    // 30 秒分を受け取り終えて受信を閉じる瞬間に、条件の人が抜けたことにする
+    const destroy = stream.destroy.bind(stream);
+    stream.destroy = ((err?: Error) => {
+      call.voiceStates.delete("host");
+      return destroy(err);
+    }) as typeof stream.destroy;
+    for (let i = 0; i < 1501; i++) stream.push(opusPacket);
+    for (let i = 0; i < 500 && !stream.destroyed; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(stream.destroyed, true);
+    await waitForTranscription(transcribe);
+    assert.equal(transcribe.mock.callCount(), 0);
+    assert.equal(call.connection.receiver.subscribe.mock.callCount(), 1);
+    call.speaking.users.delete("u1");
+  });
 });
