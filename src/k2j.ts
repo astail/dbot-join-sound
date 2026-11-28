@@ -68,6 +68,41 @@ export async function writeSpeakers(speakers: Speakers): Promise<void> {
   speakersCache = { ...speakers };
 }
 
+// 字幕の条件にする人のユーザー ID。この中の誰かが Bot と同じ通話にいるときだけ字幕を出し、
+// 誰も条件にしていなければ出さない。話者の一覧と同じく Bot・サーバーをまたいで共通の
+// 1 ファイルに持ち、起動後に 1 回だけ読む
+const triggersPath = join(soundsDir, "k2j-triggers.json");
+
+let triggersCache: string[] | undefined;
+
+export function readTriggers(): string[] {
+  triggersCache ??= loadTriggers();
+  return [...triggersCache];
+}
+
+function loadTriggers(): string[] {
+  if (!existsSync(triggersPath)) return [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(triggersPath, "utf8"));
+    // 手で編集して壊れていても Bot を止めない。字幕を出さなくなるだけ（ログは起動後に 1 回）
+    if (!Array.isArray(parsed)) {
+      throw new Error("字幕の条件にする人の一覧が JSON の配列ではありません");
+    }
+    return parsed.filter((id): id is string => typeof id === "string");
+  } catch (err) {
+    console.error("failed to read k2j triggers:", err);
+    return [];
+  }
+}
+
+export async function writeTriggers(userIds: string[]): Promise<void> {
+  // 話者の一覧の保存と同じく、一時ファイルへ書いてから rename で置き換える
+  const tmp = `${triggersPath}.${randomUUID()}.tmp`;
+  await writeFile(tmp, JSON.stringify(userIds, null, 2));
+  await rename(tmp, triggersPath);
+  triggersCache = [...userIds];
+}
+
 async function transcribeWithOpenAI(
   wav: Buffer,
   language: Lang,
@@ -228,10 +263,12 @@ export class VoicePipeline {
  * 指定した人の発話を 1 つ分受け取り、48kHz ステレオの PCM にして返す。truncated は、
  * 上限の長さで区切った（まだ話し続けているかもしれない）ことを示す。
  * Discord は人ごとに別の Opus の流れを送ってくるので、話者を聞き分ける必要はない。
+ * 受け取っている間に keep が false を返したら、その発話を捨てて（空の PCM で）すぐに終える。
  */
 export function captureUtterance(
   receiver: Pick<VoiceReceiver, "subscribe">,
   userId: string,
+  keep: () => boolean = () => true,
 ): Promise<{ pcm: Buffer; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     const opus = receiver.subscribe(userId, {
@@ -265,6 +302,12 @@ export function captureUtterance(
     };
 
     decoder.on("data", (chunk: Buffer) => {
+      if (!keep()) {
+        chunks.length = 0;
+        total = 0;
+        finish();
+        return;
+      }
       chunks.push(chunk);
       total += chunk.length;
       if (total >= maxBytes) finish(true);
@@ -319,7 +362,8 @@ async function displayName(guild: Guild, userId: string): Promise<string> {
 /**
  * 参加した通話で、話者に指定した人の発話を拾って字幕にする。韓国語話者は日本語に、
  * 日本語話者は韓国語に訳す。字幕は Bot がいる VC の付属チャットに投稿する
- * （Bot が別の VC へ移されたら移動先に投稿する）。
+ * （Bot が別の VC へ移されたら移動先に投稿する）。字幕の条件にした人が誰も
+ * Bot と同じ通話にいなければ、発話を受け取らない。
  */
 export function listenForSpeech(
   connection: VoiceConnection,
@@ -361,16 +405,30 @@ export function listenForSpeech(
     },
   };
 
+  // 条件にした人の誰かが、Bot がいる VC にいるか（Bot が移されたら移動先で見る）
+  const triggerInCall = () =>
+    readTriggers().some((id) => guild.voiceStates.cache.get(id)?.channelId === session.channelId);
+
   const startCapture = (userId: string) => {
-    if (session.destroyed || capturing.has(userId) || !readSpeakers()[userId]) return;
+    if (
+      session.destroyed ||
+      capturing.has(userId) ||
+      !readSpeakers()[userId] ||
+      !triggerInCall()
+    ) {
+      return;
+    }
     capturing.add(userId);
     let truncated = false;
-    captureUtterance(connection.receiver, userId)
+    // 受け取っている間も条件の人がいるかを見て、いなくなったらその発話を捨てる。
+    // あとで戻ってきても、誰もいなかった間の声を OpenAI に送らないように
+    captureUtterance(connection.receiver, userId, triggerInCall)
       .then((captured) => {
         truncated = captured.truncated;
-        // 話している間に指定が変わったときのため、言語は話し終えた時点で引き直す
+        // 話している間に指定が変わったときのため、言語は話し終えた時点で引き直す。
+        // 黙っている間（声が届かない間）に条件の人が抜けたときも、文字起こしに回さない
         const lang = readSpeakers()[userId];
-        if (!session.destroyed && lang && captured.pcm.length > 0) {
+        if (!session.destroyed && lang && captured.pcm.length > 0 && triggerInCall()) {
           active.pipeline.handleUtterance(guild.id, userId, captured.pcm, lang, out);
         }
       })
