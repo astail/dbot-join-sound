@@ -270,13 +270,15 @@ async function playNext(session: Session): Promise<void> {
   session.playing = true;
   try {
     for (let item = session.queue.shift(); item; item = session.queue.shift()) {
-      // 入退室の直後にいきなり鳴らさず一拍置く。待ちと合成を並行させるので、合成が
+      // 入室の直後にいきなり鳴らさず一拍置く（登録音は入室にしか鳴らない）。退室・移動と
+      // チャットは待たない。待ちと合成を並行させるので、合成が
       // 待ちより短いうちは登録音と読み上げで間の長さが揃う（長引けば合成待ちになる）。
       // 0 のときは await しない（1 tick でも遅れると再生順の判定が変わる）。
       // node:timers/promises ではなくグローバルの setTimeout を使うのは、テストから
       // タイマーを差し替えて実時間を待たずに検証できるようにするため
+      const isJoin = "path" in item || ("kind" in item && item.kind === "join");
       const pause =
-        announceDelayMs > 0
+        isJoin && announceDelayMs > 0
           ? new Promise((resolve) => setTimeout(resolve, announceDelayMs))
           : null;
 

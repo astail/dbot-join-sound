@@ -352,6 +352,64 @@ test("一拍置いている間に全員退出したら登録音を再生しな�
   assert.deepEqual(played, []);
 });
 
+test("入室の読み上げは一拍置いてから鳴らす", async () => {
+  await handleVoiceStateUpdate(
+    voiceState("u-delay-2", "アステル", null),
+    voiceState("u-delay-2", "アステル", "vc-1"),
+  );
+  await drain();
+  assert.deepEqual(played, [], "待ちが明けるまでは鳴らさない");
+
+  mock.timers.tick(ANNOUNCE_DELAY_MS);
+  await drain();
+  assert.deepEqual(played.map((r) => r.inputType), [StreamType.Arbitrary]);
+});
+
+test("退室・移動・チャットの読み上げは一拍置かずに鳴らす", async () => {
+  // 再生を終えて次へ進めるが、待ちのタイマーは進めない。待っていれば鳴らない
+  const finishWithoutDelay = async () => {
+    player.state = { status: AudioPlayerStatus.Idle };
+    idle?.();
+    await drain();
+  };
+
+  await join("u-delay-3", "アステル");
+  await join("u-delay-4", "ほか");
+  await finishPlayback();
+  await finishWithoutDelay();
+  assert.equal(played.length, 2, "入室の 2 人分");
+
+  await handleVoiceStateUpdate(
+    voiceState("u-delay-3", "アステル", "vc-1", 1),
+    voiceState("u-delay-3", "アステル", null, 1),
+  );
+  await drain();
+  assert.equal(played.length, 3, "退室");
+
+  await finishWithoutDelay();
+  await handleVoiceStateUpdate(
+    voiceState("u-delay-4", "ほか", "vc-1", 1),
+    voiceState("u-delay-4", "ほか", "vc-2", 1),
+  );
+  await drain();
+  assert.equal(played.length, 4, "移動");
+
+  await finishWithoutDelay();
+  const session = getSession("bot-id", guildId);
+  assert.ok(session);
+  enqueueText(session, "こんにちは");
+  await drain();
+  assert.equal(played.length, 5, "チャット");
+
+  assert.deepEqual(synthesized, [
+    "join:アステル",
+    "join:ほか",
+    "leave:アステル",
+    "move:ほか",
+    "chat:こんにちは",
+  ]);
+});
+
 test("offにした人は登録音があっても鳴らない", async () => {
   const userId = await registerSound("u-off-1");
   await turnOff(userId);
