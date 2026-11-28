@@ -4,7 +4,7 @@ import { unlink, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import test, { afterEach, beforeEach, mock } from "node:test";
-import type { Interaction } from "discord.js";
+import { MessageFlags, type Interaction } from "discord.js";
 import { soundsDir } from "../src/sounds.ts";
 import type { TranslateOptions, Translator } from "../src/translator.ts";
 
@@ -283,9 +283,10 @@ test("話者の一覧（人ごとの言語）を保存して読み出す", async
   assert.deepEqual(readSpeakers(), { "1": "ko", "2": "ja" });
 });
 
-type Reply = { content: string; allowedMentions?: unknown };
+type Reply = { content: string; allowedMentions?: unknown; flags?: number };
 
-// /k2j を処理させて、返信（deferReply 後の editReply を含む）を返す
+// /k2j を処理させて、返信（deferReply 後の editReply を含む）を返す。
+// 結果は本人にだけ見せるので、reply と deferReply には一時メッセージの指定が要る
 async function runK2j(
   subcommand: string,
   user: { id: string; bot?: boolean } = { id: "100" },
@@ -305,8 +306,13 @@ async function runK2j(
       getUser: () => ({ bot: false, ...user }),
       getString: () => lang,
     },
-    reply: record,
-    deferReply: async () => {},
+    reply: async (reply: Reply) => {
+      assert.equal(reply.flags, MessageFlags.Ephemeral, "結果は本人にだけ見せる");
+      await record(reply);
+    },
+    deferReply: async (options?: { flags?: number }) => {
+      assert.equal(options?.flags, MessageFlags.Ephemeral, "結果は本人にだけ見せる");
+    },
     editReply: record,
   } as unknown as Interaction;
   await handleInteraction(interaction);

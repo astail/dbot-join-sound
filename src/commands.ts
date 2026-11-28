@@ -3,6 +3,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type Interaction,
+  type InteractionReplyOptions,
 } from "discord.js";
 import { readChannels, writeChannels } from "./chat.js";
 import {
@@ -25,6 +26,16 @@ import {
 
 // 一覧に使える文字数。2000文字の上限から、コードブロックと前後の文の分を引いた目安
 const MAX_LIST_CHARS = 1800;
+
+// コマンドの結果は、実行した本人にだけ見える一時メッセージで返す。
+// 登録や一覧のたびに、通話中のみんなのチャットへ Bot の返信が流れないようにする
+async function replyPrivately(
+  interaction: ChatInputCommandInteraction,
+  reply: string | Omit<InteractionReplyOptions, "flags">,
+): Promise<void> {
+  const options = typeof reply === "string" ? { content: reply } : reply;
+  await interaction.reply({ ...options, flags: MessageFlags.Ephemeral });
+}
 
 export const commands = [
   new SlashCommandBuilder()
@@ -141,10 +152,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   // 応答しないと Discord が本人にエラーを見せるため、本人にだけ見える一時メッセージで断る。
   // コマンドは 1 体目の Bot にだけ登録するので、どの Bot が通話にいても受け付ける
   if (!interaction.guildId || !hasSessionInGuild(interaction.guildId)) {
-    await interaction.reply({
-      content: "Bot が通話に参加していないときは使えません。",
-      flags: MessageFlags.Ephemeral,
-    });
+    await replyPrivately(interaction, "Bot が通話に参加していないときは使えません。");
     return;
   }
 
@@ -194,14 +202,14 @@ async function setYomi(interaction: ChatInputCommandInteraction): Promise<void> 
     .replace(/\s+/g, " ")
     .trim();
   if (word === "" || reading === "") {
-    await interaction.reply("単語と読み方の両方を入力してください。");
+    await replyPrivately(interaction, "単語と読み方の両方を入力してください。");
     return;
   }
 
   const dict = readDict();
   dict[word] = reading;
   await writeDict(dict);
-  await interaction.reply(`「${word}」を「${reading}」と読むようにしました。`);
+  await replyPrivately(interaction, `「${word}」を「${reading}」と読むようにしました。`);
 }
 
 async function deleteYomi(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -209,19 +217,19 @@ async function deleteYomi(interaction: ChatInputCommandInteraction): Promise<voi
 
   const dict = readDict();
   if (!(word in dict)) {
-    await interaction.reply(`「${word}」の読み方は登録されていません。`);
+    await replyPrivately(interaction, `「${word}」の読み方は登録されていません。`);
     return;
   }
   delete dict[word];
   await writeDict(dict);
-  await interaction.reply(`「${word}」の読み方を削除しました。`);
+  await replyPrivately(interaction, `「${word}」の読み方を削除しました。`);
 }
 
 async function listYomi(interaction: ChatInputCommandInteraction): Promise<void> {
   const dict = readDict();
   const entries = Object.entries(dict);
   if (entries.length === 0) {
-    await interaction.reply("読み方はまだ登録されていません。");
+    await replyPrivately(interaction, "読み方はまだ登録されていません。");
     return;
   }
 
@@ -240,7 +248,8 @@ async function listYomi(interaction: ChatInputCommandInteraction): Promise<void>
   }
   const omitted = lines.length - shown.length;
 
-  await interaction.reply(
+  await replyPrivately(
+    interaction,
     `登録されている読み方:\n\`\`\`\n${shown.join("\n")}\n\`\`\`` +
       (omitted > 0 ? `ほか ${omitted} 件は長さの都合で省略しました。` : ""),
   );
@@ -249,11 +258,12 @@ async function listYomi(interaction: ChatInputCommandInteraction): Promise<void>
 async function addChannel(interaction: ChatInputCommandInteraction): Promise<void> {
   const channels = readChannels();
   if (channels.includes(interaction.channelId)) {
-    await interaction.reply("このチャンネルはすでに読み上げる設定です。");
+    await replyPrivately(interaction, "このチャンネルはすでに読み上げる設定です。");
     return;
   }
   await writeChannels([...channels, interaction.channelId]);
-  await interaction.reply(
+  await replyPrivately(
+    interaction,
     "このチャンネルのチャットを読み上げるようにしました（Bot が通話に参加している間だけ）。",
   );
 }
@@ -261,11 +271,11 @@ async function addChannel(interaction: ChatInputCommandInteraction): Promise<voi
 async function removeChannel(interaction: ChatInputCommandInteraction): Promise<void> {
   const channels = readChannels();
   if (!channels.includes(interaction.channelId)) {
-    await interaction.reply("このチャンネルは読み上げる設定になっていません。");
+    await replyPrivately(interaction, "このチャンネルは読み上げる設定になっていません。");
     return;
   }
   await writeChannels(channels.filter((id) => id !== interaction.channelId));
-  await interaction.reply("このチャンネルのチャットを読み上げないようにしました。");
+  await replyPrivately(interaction, "このチャンネルのチャットを読み上げないようにしました。");
 }
 
 async function listChannels(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -274,12 +284,14 @@ async function listChannels(interaction: ChatInputCommandInteraction): Promise<v
     interaction.guild?.channels.cache.has(id),
   );
   if (channels.length === 0) {
-    await interaction.reply(
+    await replyPrivately(
+      interaction,
       "読み上げるチャンネルは登録されていません（Bot が参加中の VC 付属チャットは登録なしで読み上げます）。",
     );
     return;
   }
-  await interaction.reply(
+  await replyPrivately(
+    interaction,
     `読み上げるチャンネル:\n${channels.map((id) => `<#${id}>`).join("\n")}`,
   );
 }
@@ -301,13 +313,13 @@ async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<voi
   const user = interaction.options.getUser("user", true);
   const lang = (interaction.options.getString("lang") ?? "ko") as Lang;
   if (user.bot) {
-    await interaction.reply("Bot は話者に指定できません。");
+    await replyPrivately(interaction, "Bot は話者に指定できません。");
     return;
   }
   const speakers = readSpeakers();
   const previous = speakers[user.id];
   if (previous === lang) {
-    await interaction.reply({
+    await replyPrivately(interaction, {
       content: `<@${user.id}> はすでに${LANG_NAMES[lang]}話者です。`,
       allowedMentions: NO_MENTIONS,
     });
@@ -317,7 +329,7 @@ async function addSpeaker(interaction: ChatInputCommandInteraction): Promise<voi
   speakers[user.id] = lang;
   await writeSpeakers(speakers);
   const changed = previous ? `（${LANG_NAMES[previous]}話者から変更）` : "";
-  await interaction.reply({
+  await replyPrivately(interaction, {
     content:
       `<@${user.id}> を${LANG_NAMES[lang]}話者にしました${changed}。` +
       `Bot がいる通話での発話を${LANG_NAMES[otherLang(lang)]}の字幕にします。\n` +
@@ -331,7 +343,7 @@ async function removeSpeaker(interaction: ChatInputCommandInteraction): Promise<
   const user = interaction.options.getUser("user", true);
   const speakers = readSpeakers();
   if (!speakers[user.id]) {
-    await interaction.reply({
+    await replyPrivately(interaction, {
       content: `<@${user.id}> は話者に指定されていません。`,
       allowedMentions: NO_MENTIONS,
     });
@@ -339,7 +351,7 @@ async function removeSpeaker(interaction: ChatInputCommandInteraction): Promise<
   }
   delete speakers[user.id];
   await writeSpeakers(speakers);
-  await interaction.reply({
+  await replyPrivately(interaction, {
     content: `<@${user.id}> の指定を外しました（現在: ${speakerCounts(speakers)}）。`,
     allowedMentions: NO_MENTIONS,
   });
@@ -377,7 +389,7 @@ async function listSpeakers(interaction: ChatInputCommandInteraction): Promise<v
     length += line.length + 1;
   }
   const omitted = lines.length - shown.length;
-  await interaction.reply({
+  await replyPrivately(interaction, {
     content:
       shown.join("\n") + (omitted > 0 ? `\nほか ${omitted} 行は長さの都合で省略しました。` : ""),
     allowedMentions: NO_MENTIONS,
@@ -387,12 +399,12 @@ async function listSpeakers(interaction: ChatInputCommandInteraction): Promise<v
 async function addTrigger(interaction: ChatInputCommandInteraction): Promise<void> {
   const user = interaction.options.getUser("user", true);
   if (user.bot) {
-    await interaction.reply("Bot は字幕の条件にできません。");
+    await replyPrivately(interaction, "Bot は字幕の条件にできません。");
     return;
   }
   const triggers = readTriggers();
   if (triggers.includes(user.id)) {
-    await interaction.reply({
+    await replyPrivately(interaction, {
       content: `<@${user.id}> はすでに字幕の条件にしています。`,
       allowedMentions: NO_MENTIONS,
     });
@@ -400,7 +412,7 @@ async function addTrigger(interaction: ChatInputCommandInteraction): Promise<voi
   }
   triggers.push(user.id);
   await writeTriggers(triggers);
-  await interaction.reply({
+  await replyPrivately(interaction, {
     content:
       `<@${user.id}> を字幕の条件にしました。` +
       `条件にした人の誰かが Bot と同じ通話にいるときだけ字幕を出します（現在 ${triggers.length} 人）。`,
@@ -412,7 +424,7 @@ async function removeTrigger(interaction: ChatInputCommandInteraction): Promise<
   const user = interaction.options.getUser("user", true);
   const triggers = readTriggers();
   if (!triggers.includes(user.id)) {
-    await interaction.reply({
+    await replyPrivately(interaction, {
       content: `<@${user.id}> は字幕の条件にしていません。`,
       allowedMentions: NO_MENTIONS,
     });
@@ -420,7 +432,7 @@ async function removeTrigger(interaction: ChatInputCommandInteraction): Promise<
   }
   const rest = triggers.filter((id) => id !== user.id);
   await writeTriggers(rest);
-  await interaction.reply({
+  await replyPrivately(interaction, {
     content:
       `<@${user.id}> を字幕の条件から外しました（現在 ${rest.length} 人）。` +
       (rest.length === 0 ? `\n${NO_TRIGGERS}` : ""),
@@ -431,13 +443,14 @@ async function removeTrigger(interaction: ChatInputCommandInteraction): Promise<
 async function showK2jStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   const active = voiceTranslation();
   if (!active) {
-    await interaction.reply(
+    await replyPrivately(
+      interaction,
       "VC の音声翻訳は止まっています（`.env` に OPENAI_API_KEY と翻訳エンジンの API キーが必要です）。",
     );
     return;
   }
   // DeepL の使用量を問い合わせる間に応答の期限（3 秒）を過ぎないよう、先に受け付けておく
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const { pipeline, sttModel } = active;
   const stats = pipeline.statsFor(interaction.guildId ?? "");
   const triggers = readTriggers().length;
