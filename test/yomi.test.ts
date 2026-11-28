@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { afterEach, mock } from "node:test";
-import type { Interaction } from "discord.js";
+import { MessageFlags, type Interaction } from "discord.js";
 import { soundsDir } from "../src/sounds.ts";
 import { applyYomi, readDict, writeDict } from "../src/yomi.ts";
 
@@ -40,8 +40,9 @@ async function runCommand(
       getSubcommand: () => subcommand,
       getString: (name: string) => options[name] ?? null,
     },
-    reply: async (content: string) => {
-      replies.push(content);
+    reply: async (payload: { content: string; flags?: number }) => {
+      assert.equal(payload.flags, MessageFlags.Ephemeral, "結果は本人にだけ見せる");
+      replies.push(payload.content);
     },
   } as unknown as Interaction;
 

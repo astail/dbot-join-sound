@@ -103,8 +103,9 @@ async function runReadChannel(
     channelId,
     guild: { channels: { cache: { has: (id: string) => guildChannelIds.includes(id) } } },
     options: { getSubcommand: () => subcommand },
-    reply: async (content: string) => {
-      replies.push(content);
+    reply: async (payload: { content: string; flags?: number }) => {
+      assert.equal(payload.flags, MessageFlags.Ephemeral, "結果は本人にだけ見せる");
+      replies.push(payload.content);
     },
   } as unknown as Interaction;
 
